@@ -1,0 +1,22 @@
+﻿# Web Dashboard Module
+
+# Web Dashboard Prototype
+
+This is a prototype of the Web Dashboard for Smart Garbage Detection.
+
+## What It Shows
+- List of garbage detections
+- Map view of garbage locations
+- Image preview of detected garbage
+
+## What It Does Not Include
+- Full backend
+- Mobile app
+- Final system features
+
+## How to Run
+1. Install dependencies: npm install
+2. Start: npm run dev
+3. Open in browser
+
+This is only a prototype for hackathon submission.

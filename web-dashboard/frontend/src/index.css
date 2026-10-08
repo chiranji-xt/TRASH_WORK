@@ -1,0 +1,48 @@
+/* -------------------------------------------------- */
+/* 1️⃣ ALL IMPORTS MUST COME FIRST                     */
+/* -------------------------------------------------- */
+@import "leaflet/dist/leaflet.css";
+@import "leaflet.markercluster/dist/MarkerCluster.css";
+@import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+
+/* -------------------------------------------------- */
+/* 2️⃣ NOW TAILWIND DIRECTIVES                        */
+/* -------------------------------------------------- */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -------------------------------------------------- */
+/* 3️⃣ NOW YOUR CUSTOM CSS                            */
+/* -------------------------------------------------- */
+
+/* Fix Leaflet container */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+}
+
+/* Hide marker cluster bubbles (optional) */
+.marker-cluster {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.marker-cluster div {
+  background: transparent !important;
+  border: none !important;
+  color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Global UI Styling */
+body {
+  @apply bg-gray-900 text-white;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
