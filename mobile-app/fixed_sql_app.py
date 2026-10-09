@@ -1,3 +1,5 @@
+"""DEPRECATED experiment. See DEPRECATED.md.
+Canonical backend: backend-database/backend/app.py. Do not run this file."""
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware

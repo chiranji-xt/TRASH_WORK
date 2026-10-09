@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'report_store.dart';
-
 class AllReportsPage extends StatefulWidget {
 	const AllReportsPage({super.key});
 
@@ -95,10 +94,10 @@ class _AllReportsPageState extends State<AllReportsPage> {
 														Container(
 															padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
 															decoration: BoxDecoration(
-																color: r.status == 'Resolved' ? Colors.green.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+																color: r.status == kStatusCleaned ? Colors.green.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
 																borderRadius: BorderRadius.circular(12),
 																border: Border.all(
-																	color: r.status == 'Resolved' ? Colors.green : Colors.orange,
+																	color: r.status == kStatusCleaned ? Colors.green : Colors.orange,
 																),
 															),
 															child: Text(
@@ -106,7 +105,7 @@ class _AllReportsPageState extends State<AllReportsPage> {
 																style: TextStyle(
 																	fontSize: 12,
 																	fontWeight: FontWeight.bold,
-																	color: r.status == 'Resolved' ? Colors.green : Colors.orange,
+																	color: r.status == kStatusCleaned ? Colors.green : Colors.orange,
 																),
 															),
 														),

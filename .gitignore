@@ -1,10 +1,10 @@
 node_modules/
-dist/
 .env
 __pycache__/
 .venv/
 uploads/
 *.pt
 *.onnx
+*.zip
 .DS_Store
 Thumbs.db

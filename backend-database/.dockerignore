@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+uploads/
+annotated/
+weights.zip
+.env
+.git

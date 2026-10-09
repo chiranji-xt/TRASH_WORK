@@ -1,236 +1,244 @@
 """
 YOLOv8 Garbage Detection Model
-Handles loading and inference for the trained garbage classification model
+Handles loading and inference for the trained garbage classification model.
+
+Class names are read from the loaded weights (model.names) instead of a
+hardcoded dict, so 5-class and 8-class checkpoints both work without code
+changes. A hardcoded fallback is kept only for when no weights are present.
+
+Script-side quality tuning (no retraining needed):
+- PER_CLASS_CONF: per-class confidence bars. Plastic gets a high bar because
+  validation showed 42% of background predicted as plastic; reliable classes
+  (Metal/Glass/Styrofoam) keep low bars to preserve recall.
+- IOU_THRESHOLD: NMS setting; lower merges double-boxes more aggressively.
+- MIN_BOX_AREA_FRAC: drops tiny noise boxes (background-FP source).
 """
+import logging
 import os
+
 # Set environment variable BEFORE importing torch/ultralytics
-os.environ['TORCH_ALLOW_UNSAFE_LOADING'] = '1'
+os.environ.setdefault("TORCH_ALLOW_UNSAFE_LOADING", "1")
 
 from ultralytics import YOLO
-from ..config import MODEL_PATH
+
+from ..config import (
+    ANNOTATED_DIR,
+    CONFIDENCE_THRESHOLD,
+    IOU_THRESHOLD,
+    MIN_BOX_AREA_FRAC,
+    MODEL_PATH,
+    PER_CLASS_CONF,
+)
+
+logger = logging.getLogger(__name__)
 
 # Global model instance
 model = None
 
-# Class names mapping - Original model (8 classes)
-CLASS_NAMES = {
-    0: "Cardboard Waste",
-    1: "Cigarette",
-    2: "Food Waste",
-    3: "Glass Waste",
-    4: "Metal Waste",
-    5: "Paper Waste",
-    6: "Plastic Waste",
-    7: "Styrofoam"
+# Fallback class names used only if the weights file is missing/unreadable.
+# The real names always come from model.names after load.
+FALLBACK_CLASS_NAMES = {
+    0: "Cardboard_Paper",
+    1: "Glass Waste",
+    2: "Metal Waste",
+    3: "Plastic Waste",
+    4: "Styrofoam",
 }
 
-def load_model():
-    """Load the YOLOv8 model from the specified path"""
-    global model  # CRITICAL: Must declare global to modify module-level variable
-    
+
+def _current_class_names():
+    """Return class names from the loaded model, falling back to defaults."""
+    global model
     if model is not None:
-        print("[ML MODEL] Model already loaded")
+        try:
+            names = getattr(model, "names", None)
+            if isinstance(names, dict) and names:
+                return {int(k): str(v) for k, v in names.items()}
+        except Exception:
+            pass
+    return dict(FALLBACK_CLASS_NAMES)
+
+
+def load_model():
+    """Load the YOLOv8 model from the specified path."""
+    global model
+
+    if model is not None:
+        logger.debug("Model already loaded")
         return model
-    
+
     try:
-        print(f"[ML MODEL] Loading model from: {MODEL_PATH}")
-        
+        logger.info("Loading model from: %s", MODEL_PATH)
+
         if not os.path.exists(MODEL_PATH):
             raise FileNotFoundError(f"Model file not found at: {MODEL_PATH}")
-        
-        # Load YOLO model with torch.load workaround for pickle compatibility
-        print("[ML MODEL] Initializing YOLO model...")
-        
-        # Try loading with weights_only=False for older PyTorch models
+
         import torch
         import warnings
-        warnings.filterwarnings('ignore', category=FutureWarning)
-        
-        # Monkey-patch torch.load to use weights_only=False
+        warnings.filterwarnings("ignore", category=FutureWarning)
+
+        # Monkey-patch torch.load to use weights_only=False for older checkpoints
         original_load = torch.load
+
         def patched_load(*args, **kwargs):
-            kwargs['weights_only'] = False
+            kwargs["weights_only"] = False
             return original_load(*args, **kwargs)
+
         torch.load = patched_load
-        
         try:
             model = YOLO(MODEL_PATH)
         finally:
-            # Restore original torch.load
             torch.load = original_load
-        
-        print(f"[ML MODEL] ✓ Model loaded successfully!")
-        print(f"[ML MODEL] Model type: {type(model)}")
-        print(f"[ML MODEL] Number of classes: {len(CLASS_NAMES)}")
-        print(f"[ML MODEL] Classes: {list(CLASS_NAMES.values())}")
-        
+
+        names = _current_class_names()
+        logger.info("Model loaded. %d classes: %s", len(names), sorted(names.values()))
         return model
-        
+
     except Exception as e:
-        print(f"[ML MODEL ERROR] ✗ Failed to load model!")
-        print(f"[ML MODEL ERROR] Error type: {type(e).__name__}")
-        print(f"[ML MODEL ERROR] Error message: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        # Don't raise - let it fall back to pending
+        logger.exception("Failed to load model: %s", e)
         return None
+
+
+def _run_model(image_path):
+    """Run YOLO with the floor threshold; per-class filtering happens after."""
+    global model
+    if model is None:
+        load_model()
+    if model is None:
+        raise RuntimeError(f"Model not loaded (MODEL_PATH={MODEL_PATH})")
+
+    # Floor = lowest bar, so no detection above its own class threshold is cut.
+    floor = min([CONFIDENCE_THRESHOLD, *PER_CLASS_CONF.values()])
+    logger.debug("Inference on %s (conf floor=%s, iou=%s)", image_path, floor, IOU_THRESHOLD)
+    results = model(image_path, conf=floor, iou=IOU_THRESHOLD, verbose=False)
+    return results[0]
+
+
+def _extract_detections(result):
+    """Convert a YOLO result into a sorted, filtered list of detection dicts.
+
+    Filters (script-side quality tuning):
+    1. Per-class confidence bar (Plastic 0.45 default — background-FP guard).
+    2. Minimum box-area fraction (drops tiny noise boxes).
+    """
+    names = _current_class_names()
+    try:
+        h, w = result.orig_shape
+        img_area = float(h * w)
+    except Exception:
+        img_area = 0.0
+
+    all_detections = []
+    for box in result.boxes:
+        class_id = int(box.cls[0])
+        confidence = float(box.conf[0])
+        label = names.get(class_id, f"Unknown-{class_id}")
+
+        bar = PER_CLASS_CONF.get(label, CONFIDENCE_THRESHOLD)
+        if confidence < bar:
+            continue
+
+        x1, y1, x2, y2 = (round(float(c), 2) for c in box.xyxy[0].tolist())
+        if img_area > 0:
+            area_frac = max(0.0, x2 - x1) * max(0.0, y2 - y1) / img_area
+            if area_frac < MIN_BOX_AREA_FRAC:
+                continue
+        else:
+            area_frac = 0.0
+
+        all_detections.append({
+            "class": label,
+            "class_id": class_id,
+            "confidence": round(confidence, 4),
+            "bbox": [x1, y1, x2, y2],
+            "area_frac": round(area_frac, 5),
+        })
+    all_detections.sort(key=lambda x: x["confidence"], reverse=True)
+    return all_detections
+
+
+def _save_annotated(image_path, detections):
+    """Draw only the kept (filtered) detections and save the boxed image."""
+    import cv2
+
+    boxed_name = "boxed_" + os.path.basename(image_path)
+    boxed_path = os.path.join(ANNOTATED_DIR, boxed_name)
+
+    img = cv2.imread(image_path)
+    if img is None:
+        logger.warning("Could not read image for annotation: %s", image_path)
+        return None
+
+    for d in detections:
+        x1, y1, x2, y2 = (int(c) for c in d["bbox"])
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 255), 2)
+        label = f"{d['class']} {d['confidence']:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        cv2.rectangle(img, (x1, y1 - th - 8), (x1 + tw + 4, y1), (0, 255, 255), -1)
+        cv2.putText(img, label, (x1 + 2, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+    cv2.imwrite(boxed_path, img)
+    logger.debug("Saved annotated image to: %s", boxed_path)
+    return boxed_name
+
 
 def predict(image_path):
     """
-    Run inference on an image and return predictions
-    
-    Args:
-        image_path (str): Path to the image file
-        
+    Run inference on an image and return predictions.
+
     Returns:
         tuple: (primary_class, confidence, all_detections)
-            - primary_class (str): Class name of highest confidence detection
-            - confidence (float): Confidence score (0-1) of primary detection
-            - all_detections (list): List of all detections with details
     """
-    global model
-    
-    # Load model if not already loaded
-    if model is None:
-        load_model()
-    
-    try:
-        print(f"[ML MODEL] Running inference on: {image_path}")
-        
-        # Run inference with 25% confidence threshold
-        # Higher threshold reduces false positives from backgrounds/patterns
-        results = model(image_path, conf=0.25, verbose=False)
-        
-        # Get the first result (single image)
-        result = results[0]
-        
-        # Check if any detections were found
-        if len(result.boxes) == 0:
-            print(f"[ML MODEL] No detections found")
-            return "No Waste Detected", 0.0, []
-        
-        # Extract all detections
-        all_detections = []
-        for box in result.boxes:
-            class_id = int(box.cls[0])
-            confidence = float(box.conf[0])
-            bbox = box.xyxy[0].tolist()  # [x1, y1, x2, y2]
-            
-            detection = {
-                "class": CLASS_NAMES.get(class_id, f"Unknown-{class_id}"),
-                "class_id": class_id,
-                "confidence": round(confidence, 4),
-                "bbox": [round(coord, 2) for coord in bbox]
-            }
-            all_detections.append(detection)
-        
-        # Sort by confidence (highest first)
-        all_detections.sort(key=lambda x: x["confidence"], reverse=True)
-        
-        # Primary detection is the one with highest confidence
-        primary = all_detections[0]
-        primary_class = primary["class"]
-        primary_confidence = primary["confidence"]
-        
-        print(f"[ML MODEL] Primary detection: {primary_class} ({primary_confidence:.2%})")
-        print(f"[ML MODEL] Total detections: {len(all_detections)}")
-        
-        return primary_class, primary_confidence, all_detections
-        
-    except Exception as e:
-        print(f"[ML MODEL ERROR] Prediction failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise e
+    result = _run_model(image_path)
+    logger.debug("Raw detections found: %d", len(result.boxes))
+    all_detections = _extract_detections(result)
+
+    if not all_detections:
+        logger.debug("No detections kept after filtering")
+        return "No Waste Detected", 0.0, []
+
+    primary = all_detections[0]
+    logger.info("Primary detection: %s (%.2f%%), total=%d",
+                primary["class"], primary["confidence"] * 100, len(all_detections))
+    return primary["class"], primary["confidence"], all_detections
+
 
 def get_class_name(class_id):
-    """Get class name from class ID"""
-    return CLASS_NAMES.get(class_id, f"Unknown-{class_id}")
+    """Get class name from class ID (prefers loaded model names)."""
+    return _current_class_names().get(int(class_id), f"Unknown-{class_id}")
+
 
 def run_inference(image_path):
     """
     Run inference on an image and save annotated version with bounding boxes
-    
-    Args:
-        image_path (str): Path to the image file
-        
+    (only filtered/kept detections are drawn).
+
     Returns:
         tuple: (all_detections, boxed_filename)
-            - all_detections (list): List of all detections with details
-            - boxed_filename (str): Filename of the annotated image
     """
-    global model
-    
-    # Load model if not already loaded
-    if model is None:
-        load_model()
-    
-    try:
-        print(f"[ML MODEL] Running inference on: {image_path}")
-        
-        # Run inference with 25% confidence threshold
-        # Higher threshold reduces false positives from backgrounds/patterns
-        results = model(image_path, conf=0.25, verbose=False)
-        
-        # Get the first result (single image)
-        result = results[0]
-        
-        # Debug logging
-        print(f"[ML MODEL] Raw detections found: {len(result.boxes)}")
-        
-        # Generate annotated image with bounding boxes
-        import cv2
-        from ..config import ANNOTATED_DIR
-        
-        boxed_name = "boxed_" + os.path.basename(image_path)
-        boxed_path = os.path.join(ANNOTATED_DIR, boxed_name)
-        
-        # Save image with bounding boxes using YOLO's plot method
-        annotated = result.plot()
-        cv2.imwrite(boxed_path, annotated)
-        print(f"[ML MODEL] Saved annotated image to: {boxed_path}")
-        
-        # Extract all detections
-        all_detections = []
-        for box in result.boxes:
-            class_id = int(box.cls[0])
-            confidence = float(box.conf[0])
-            bbox = box.xyxy[0].tolist()  # [x1, y1, x2, y2]
-            
-            detection = {
-                "class": CLASS_NAMES.get(class_id, f"Unknown-{class_id}"),
-                "class_id": class_id,
-                "confidence": round(confidence, 4),
-                "bbox": [round(coord, 2) for coord in bbox]
-            }
-            all_detections.append(detection)
-        
-        # Sort by confidence (highest first)
-        all_detections.sort(key=lambda x: x["confidence"], reverse=True)
-        
-        print(f"[ML MODEL] Total detections: {len(all_detections)}")
-        if all_detections:
-            print(f"[ML MODEL] Primary detection: {all_detections[0]['class']} ({all_detections[0]['confidence']:.2%})")
-        
-        # Return just the filename (not full path) for consistency
-        return all_detections, boxed_name
-        
-    except Exception as e:
-        print(f"[ML MODEL ERROR] Inference failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise e
+    result = _run_model(image_path)
+    logger.debug("Raw detections found: %d", len(result.boxes))
+    all_detections = _extract_detections(result)
+    logger.info("Total detections kept: %d", len(all_detections))
+
+    boxed_name = _save_annotated(image_path, all_detections)
+    return all_detections, boxed_name
+
 
 def get_model_info():
-    """Get information about the loaded model"""
+    """Get information about the loaded model."""
     global model
-    
     if model is None:
-        return {"status": "not_loaded"}
-    
+        return {"status": "not_loaded", "model_path": MODEL_PATH}
+    names = _current_class_names()
     return {
         "status": "loaded",
         "model_path": MODEL_PATH,
-        "num_classes": len(CLASS_NAMES),
-        "classes": CLASS_NAMES
+        "confidence_threshold": CONFIDENCE_THRESHOLD,
+        "per_class_thresholds": dict(PER_CLASS_CONF),
+        "iou_threshold": IOU_THRESHOLD,
+        "min_box_area_frac": MIN_BOX_AREA_FRAC,
+        "num_classes": len(names),
+        "classes": names,
     }

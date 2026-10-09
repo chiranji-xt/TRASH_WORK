@@ -1,12 +1,12 @@
-// Backend URL configuration
-// For Android Emulator: use 10.0.2.2 (maps to host's localhost)
-// For Physical Device: replace with your PC's LAN IP (e.g., 192.168.1.106)
-// You can find your PC IP by running: ipconfig (Windows) or ifconfig (Mac/Linux)
-
-// For Physical Device: Using your PC's IP
-// TODO: REPLACE THIS WITH THE NGROK URL FROM THE BACKEND LAPTOP
-// Example: const String baseUrl = 'https://a1b2-c3d4.ngrok-free.app';
-const String baseUrl = 'https://subtemporal-superdesirously-austin.ngrok-free.dev';
-
-// For Android Emulator (if running backend locally on same machine):
-// const String baseUrl = 'http://10.0.2.2:8000';
+// Backend URL configuration.
+//
+// Set via --dart-define at build/run time (never commit ngrok URLs):
+//   flutter run --dart-define=API_BASE_URL=https://<your-subdomain>.ngrok-free.dev
+//   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000   (Android emulator -> host localhost)
+//   flutter run --dart-define=API_BASE_URL=http://192.168.1.100:8000 (physical device via LAN IP)
+//
+// Defaults to the Android-emulator loopback for local development.
+const String baseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'http://10.0.2.2:8000',
+);

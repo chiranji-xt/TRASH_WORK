@@ -1,3 +1,5 @@
+"""DEPRECATED prototype (Flask + Firebase). See DEPRECATED.md.
+Canonical backend: backend-database/backend/app.py. Do not run this file."""
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import os

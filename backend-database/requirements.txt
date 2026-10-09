@@ -4,9 +4,11 @@ sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
 geoalchemy2==0.14.2
 shapely==2.0.2
+numpy==1.26.4
 python-multipart==0.0.6
 pillow==10.1.0
 ultralytics==8.0.227
 opencv-python==4.8.1.78
 python-dotenv==1.0.0
+alembic==1.13.1
 

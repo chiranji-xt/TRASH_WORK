@@ -5,6 +5,7 @@ import 'settings_page.dart';
 import 'onboarding_page.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'detection_preview_page.dart';
 import 'all_reports_page.dart';
@@ -152,11 +153,8 @@ class _RootScaffoldState extends State<RootScaffold> {
           label: const Text('Capture'),
         );
       case 1:
-        return FloatingActionButton.extended(
-          onPressed: () {},
-          icon: const Icon(Icons.send),
-          label: const Text('Submit'),
-        );
+        // Report tab has its own Submit button inside ReportPage — no FAB needed.
+        return null;
       default:
         return null;
     }
@@ -211,8 +209,25 @@ class _RootScaffoldState extends State<RootScaffold> {
       return;
     }
     Navigator.of(context).pop();
+    // Attach current location so preview can run real detection immediately.
+    double? lat;
+    double? lon;
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm != LocationPermission.denied && perm != LocationPermission.deniedForever) {
+        final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+        lat = pos.latitude;
+        lon = pos.longitude;
+      }
+    } catch (_) {
+      // Location unavailable — preview will prompt to use the Report tab.
+    }
+    if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => DetectionPreviewPage(imageFile: File(file.path)),
+      builder: (_) => DetectionPreviewPage(imageFile: File(file.path), latitude: lat, longitude: lon),
     ));
   }
 }

@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in backend-database/.env}
+      POSTGRES_DB: ${DB_NAME:-garbage_detection_db}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend-database
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend-database/.env
+    environment:
+      DB_HOST: db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend-database/backend/uploads:/app/backend/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn backend.app:app --host 0.0.0.0 --port 8000
+
+volumes:
+  pgdata:
