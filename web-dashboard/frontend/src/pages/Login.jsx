@@ -6,63 +6,62 @@ export default function Login({ onLogin }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (email.trim() && password.trim()) {
-      onLogin();
-    }
+    if (email.trim() && password.trim()) onLogin();
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0f172a] via-[#020617] to-black flex items-center justify-center px-4">
-      <div className="max-w-md w-full">
-        <div className="mb-6 text-center text-white/70 text-xs tracking-[0.25em] uppercase">
-           Municipal OS
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-4 py-10">
+      <div className="grid w-full max-w-4xl grid-cols-1 overflow-hidden rounded-2xl border border-line bg-white shadow-pop md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        {/* Brand panel */}
+        <div className="relative hidden flex-col justify-between overflow-hidden bg-forest-deep p-8 text-white md:flex">
+          <div className="map-grid pointer-events-none absolute inset-0 opacity-70" />
+          <div className="pointer-events-none absolute -bottom-24 -right-16 h-64 w-64 rounded-full bg-civic-lime/15 blur-3xl" />
+          <div className="relative">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-civic-lime text-lg font-bold text-forest-deep">◈</span>
+            <p className="font-display mt-4 text-[26px] font-semibold leading-tight tracking-tight">CleanCity Ops</p>
+            <p className="metalabel mt-1.5 !text-white/40">Municipal waste console</p>
+          </div>
+          <div className="relative">
+            <p className="font-display text-[19px] font-medium leading-snug text-white/90">
+              “Every report mapped.<br />Every zone answered.”
+            </p>
+            <div className="mt-5 space-y-2.5 border-t border-white/10 pt-5 text-[13px]">
+              {[
+                ["Live report feed", "detections queue in real time"],
+                ["Hotspot intelligence", "density, zones and pins"],
+                ["One-tap dispatch", "pending → cleaned"],
+              ].map(([t, s]) => (
+                <div key={t} className="flex items-baseline gap-2">
+                  <span className="h-1 w-1 shrink-0 translate-y-[-2px] rounded-full bg-civic-lime" />
+                  <p className="text-white/80"><span className="font-semibold text-white">{t}</span> — {s}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <p className="relative font-mono text-[11px] text-white/35">civic operations · est. for the city</p>
         </div>
 
-        <div className="glass-card bg-white/10 border-white/20 text-white p-8 rounded-3xl">
-          <h1 className="text-2xl md:text-3xl font-semibold mb-2">
-            Sign in to continue
-          </h1>
-          <p className="text-sm text-white/60 mb-8">
-            Access the waste intelligence dashboard for your municipality.
-          </p>
+        {/* Form panel — behavior preserved */}
+        <div className="p-7 md:p-9">
+          <p className="metalabel md:hidden">CleanCity Ops · sign in</p>
+          <h1 className="font-display mt-1 text-[28px] font-semibold tracking-tight text-ink">Welcome back</h1>
+          <p className="mt-1.5 text-sm leading-relaxed text-ink-mute">Sign in to manage waste reports and cleanup dispatch.</p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="mt-7 space-y-4">
             <div>
-              <label className="block text-xs text-white/60 mb-1">
-                Email
-              </label>
-              <input
-                type="email"
-                className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/15 text-sm outline-none focus:ring-2 focus:ring-blue-400/70 focus:border-transparent placeholder:text-white/30"
-                placeholder="you@example.com"
-                onChange={(e) => setEmail(e.target.value)}
-              />
+              <label htmlFor="login-email" className="mb-1.5 block text-[13px] font-bold text-ink">Work email</label>
+              <input id="login-email" type="email" required value={email} className="inv-input px-3.5 py-2.5" placeholder="you@municipality.gov" onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
             </div>
-
             <div>
-              <label className="block text-xs text-white/60 mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                className="w-full px-3 py-2.5 rounded-xl bg-white/5 border border-white/15 text-sm outline-none focus:ring-2 focus:ring-blue-400/70 focus:border-transparent placeholder:text-white/30"
-                placeholder="••••••••"
-                onChange={(e) => setPassword(e.target.value)}
-              />
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <label htmlFor="login-password" className="block text-[13px] font-bold text-ink">Password</label>
+              </div>
+              <input id="login-password" type="password" required value={password} className="inv-input px-3.5 py-2.5" placeholder="••••••••" onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
             </div>
-
-            <button
-              type="submit"
-              className="w-full mt-2 py-2.5 rounded-xl bg-white text-black text-sm font-medium hover:bg-white/90 transition shadow-[0_14px_35px_rgba(0,0,0,0.35)]"
-            >
-              Continue
-            </button>
+            <button type="submit" className="inv-btn-primary w-full !py-3">Sign in to console</button>
           </form>
 
-          <p className="mt-6 text-[11px] text-white/40 text-center">
-            This is a demo build. Any email / password combination will sign
-            you in.
-          </p>
+          <p className="mt-6 border-t border-line pt-4 text-center text-[11px] leading-relaxed text-ink-mute">Demo build — any email / password combination will sign you in.</p>
         </div>
       </div>
     </div>

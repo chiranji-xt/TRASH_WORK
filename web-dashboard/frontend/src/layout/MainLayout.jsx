@@ -3,10 +3,9 @@ import { Outlet } from "react-router-dom";
 
 export default function MainLayout() {
   return (
-    <div className="flex w-full h-screen">
+    <div className="flex min-h-screen w-full bg-canvas">
       <Sidebar />
-
-      <div className="flex-1 bg-gray-100 p-6 overflow-auto">
+      <div className="min-w-0 flex-1 px-4 py-5 md:px-6">
         <Outlet />
       </div>
     </div>

@@ -13,36 +13,196 @@
 @tailwind utilities;
 
 /* -------------------------------------------------- */
-/* 3️⃣ NOW YOUR CUSTOM CSS                            */
+/* 3️⃣ CLEANCITY OPS CIVIC IDENTITY TOKENS             */
 /* -------------------------------------------------- */
 
-/* Fix Leaflet container */
+:root {
+  --bg-app: #f7f6f0;
+  --bg-card: #ffffff;
+  --line: #e2e7de;
+  --line-strong: #c9d1c1;
+  --forest: #123d32;
+  --evergreen: #092820;
+  --lime: #c7f36b;
+  --ink: #25352f;
+  --ink-soft: #45564f;
+  --sage: #819087;
+  --amber: #f2b84b;
+  --coral: #e66b59;
+  --brand: #123d32;
+  --brand-dark: #092820;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  @apply antialiased;
+  background: var(--bg-app);
+  color: var(--ink);
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: -0.005em;
+}
+
+::selection {
+  background: #c7f36b;
+  color: #092820;
+}
+
+/* Display serif for mastheads and landmark figures */
+.font-display {
+  font-family: "Fraunces", Georgia, serif;
+  letter-spacing: -0.01em;
+}
+
+/* Numeric readouts */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Micro metadata label — sage, uppercase, tracked */
+.metalabel {
+  @apply text-[11px] font-semibold uppercase;
+  letter-spacing: 0.12em;
+  color: var(--sage);
+}
+
+/* ---- Civic primitives: thin borders, restrained radii ---- */
+@layer components {
+  .inv-card {
+    @apply rounded-xl border bg-white shadow-card;
+    border-color: var(--line);
+  }
+  .inv-card-hover {
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  }
+  .inv-card-hover:hover {
+    border-color: var(--line-strong);
+    box-shadow: 0 10px 26px -16px rgba(9, 40, 32, 0.25);
+    transform: translateY(-1px);
+  }
+  .inv-label {
+    @apply text-[11px] font-semibold uppercase;
+    letter-spacing: 0.12em;
+    color: var(--sage);
+  }
+  .inv-input {
+    @apply w-full rounded-lg border bg-white text-sm outline-none transition placeholder:text-stone-400;
+    border-color: var(--line);
+    color: var(--ink);
+  }
+  .inv-input:focus {
+    border-color: var(--forest);
+    box-shadow: 0 0 0 3px rgba(18, 61, 50, 0.12);
+  }
+  .inv-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition;
+    background: var(--forest);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 18px -10px rgba(9, 40, 32, 0.6);
+  }
+  .inv-btn-primary:hover { background: var(--evergreen); }
+  .inv-btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+  .inv-btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border bg-white px-3.5 py-2.5 text-sm font-semibold transition;
+    border-color: var(--line);
+    color: var(--ink);
+  }
+  .inv-btn-ghost:hover {
+    border-color: var(--line-strong);
+    background: #fbfaf5;
+  }
+  .inv-btn-lime {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition;
+    background: var(--lime);
+    color: var(--evergreen);
+    box-shadow: 0 8px 18px -10px rgba(9, 40, 32, 0.5);
+  }
+  .inv-btn-lime:hover { filter: brightness(1.04); }
+  .inv-table-head {
+    @apply text-[11px] font-semibold uppercase;
+    letter-spacing: 0.1em;
+    color: var(--sage);
+  }
+  .inv-row {
+    transition: background 0.15s ease;
+  }
+  .inv-row:hover {
+    background: #faf8f1;
+  }
+  .lift {
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .lift:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 26px -16px rgba(9, 40, 32, 0.3);
+  }
+  .inv-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .inv-scroll::-webkit-scrollbar-thumb {
+    background: #cfd6c8;
+    border-radius: 8px;
+  }
+  .inv-scroll::-webkit-scrollbar-track { background: transparent; }
+}
+
+/* Faint map-grid motif for brand surfaces */
+.map-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+.map-grid-dark {
+  background-image:
+    linear-gradient(rgba(18, 61, 50, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18, 61, 50, 0.07) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+.dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.16) 1.2px, transparent 1.2px);
+  background-size: 18px 18px;
+}
+
+/* ---- Leaflet civic treatment ---- */
 .leaflet-container {
   height: 100%;
   width: 100%;
+  background: #eef0e6;
+  font-family: inherit;
+  outline: none;
+}
+.leaflet-popup-content-wrapper {
+  background: #ffffff;
+  color: #25352f;
+  border: 1px solid #e2e7de;
+  border-radius: 10px;
+  box-shadow: 0 16px 40px -12px rgba(9, 40, 32, 0.25);
+}
+.leaflet-popup-tip { background: #ffffff; border: 1px solid #e2e7de; }
+.leaflet-popup-content { margin: 12px 14px; line-height: 1.45; }
+.leaflet-popup-close-button { color: #819087 !important; }
+
+/* ---- Motion: quiet and purposeful ---- */
+@keyframes riseIn {
+  from { transform: translateY(6px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.rise { animation: riseIn 0.3s ease both; }
+.rise-1 { animation: riseIn 0.3s 0.05s ease both; }
+.rise-2 { animation: riseIn 0.3s 0.1s ease both; }
+.rise-3 { animation: riseIn 0.3s 0.15s ease both; }
+
+@keyframes brandPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.92); opacity: 0.75; }
+}
+.brand-pulse { animation: brandPulse 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* Hide marker cluster bubbles (optional) */
-.marker-cluster {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.marker-cluster div {
-  background: transparent !important;
-  border: none !important;
-  color: transparent !important;
-  box-shadow: none !important;
-}
-
-/* Global UI Styling */
-body {
-  @apply bg-gray-900 text-white;
-  animation: fadeIn 0.3s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+:focus-visible {
+  outline: 2px solid rgba(18, 61, 50, 0.6);
+  outline-offset: 2px;
 }

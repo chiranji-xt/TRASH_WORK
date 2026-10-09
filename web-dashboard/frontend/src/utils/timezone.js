@@ -25,4 +25,18 @@ export function getISTDateKey(utcString) {
   });
 }
 
+// Short waiting-time label for dispatch priority, e.g. "3d 5h", "45m", "just now"
+export function ageOf(utcString) {
+  if (!utcString) return "—";
+  const then = new Date(/Z$/.test(utcString) ? utcString : `${utcString}Z`).getTime();
+  if (isNaN(then)) return "—";
+  const mins = Math.max(0, Math.floor((Date.now() - then) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  const days = Math.floor(hours / 24);
+  return days < 30 ? `${days}d ${hours % 24}h` : `${Math.floor(days / 30)}mo`;
+}
+
 

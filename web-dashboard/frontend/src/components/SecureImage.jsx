@@ -76,7 +76,7 @@ export default function SecureImage({ src, alt, className, onError }) {
         }
         // If onError didn't handle it or wasn't provided, show fallback or nothing
         return (
-            <div className={`${className} bg-gray-700 flex items-center justify-center text-gray-500 text-xs`}>
+            <div className={`${className} bg-[#F4F2E9] flex items-center justify-center text-ink-mute text-xs`}>
                 Failed to load
             </div>
         );
@@ -84,8 +84,8 @@ export default function SecureImage({ src, alt, className, onError }) {
 
     if (loading) {
         return (
-            <div className={`${className} bg-gray-800 animate-pulse flex items-center justify-center`}>
-                <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin"></div>
+            <div className={`${className} bg-[#F4F2E9] animate-pulse flex items-center justify-center`}>
+                <div className="w-6 h-6 border-2 border-line border-t-forest rounded-full animate-spin"></div>
             </div>
         );
     }

@@ -45,8 +45,9 @@ function HeatmapLayer({ points }) {
 // ------------------------------------------
 export default function Map() {
   return (
-    <div className="w-full h-full p-6">
-      <h1 className="text-2xl font-bold mb-4">Live Report Map</h1>
+    <div className="w-full">
+      <p className="inv-label mb-2">Legacy view · unrouted</p>
+      <h1 className="font-display mb-4 text-[26px] font-semibold tracking-tight text-ink">Live Report Map</h1>
 
       <MapContainer
         center={[12.9716, 77.5946]}

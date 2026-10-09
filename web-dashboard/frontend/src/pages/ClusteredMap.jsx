@@ -142,10 +142,10 @@ export default function ClusteredMap() {
 
   if (loading && points.length === 0) {
     return (
-      <div className="w-full h-full p-6 text-white flex items-center justify-center">
+      <div className="w-full p-6 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-          <p>Loading map...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-forest mx-auto mb-4"></div>
+          <p className="text-sm font-medium text-ink-soft">Loading zone map…</p>
         </div>
       </div>
     );
@@ -153,26 +153,26 @@ export default function ClusteredMap() {
 
   if (error) {
     return (
-      <div className="w-full h-full p-6 text-white">
-        <div className="bg-red-900/20 border border-red-500 rounded-lg p-4 mb-4">
-          <p className="text-red-400">{error}</p>
-          <button onClick={loadReports} className="mt-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded transition">Retry</button>
+      <div className="w-full p-6">
+        <div className="rounded-xl border border-[#F2C4B8] bg-[#FDF0EC] p-4 mb-4">
+          <p className="text-sm font-semibold text-[#A03E2E]">{error}</p>
+          <button onClick={loadReports} className="mt-2 px-4 py-2 bg-forest text-white text-sm font-semibold rounded-lg transition">Retry</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="w-full h-full p-6 text-white">
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold">Clustered Map</h1>
-        <div className="bg-gray-800 text-xs px-3 py-1 rounded border border-gray-700">
+    <div className="w-full">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h1 className="font-display text-[26px] font-semibold tracking-tight text-ink">Clustered Map</h1>
+        <div className="tnum rounded-lg border border-line bg-white px-3 py-1.5 font-mono text-xs font-bold text-ink-soft">
           Showing {stats.visible} of {stats.total} reports ({stats.skipped} hidden w/o location)
         </div>
       </div>
 
       {points.length === 0 && !loading && (
-        <div className="bg-gray-800 rounded-lg p-4 mb-4 text-center text-gray-400">
+        <div className="inv-card mb-4 px-5 py-4 text-center text-sm text-gray-500">
           No reports with valid coordinates available. Showing default view (Pune).
         </div>
       )}
