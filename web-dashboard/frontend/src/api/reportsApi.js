@@ -1,5 +1,5 @@
 // API Configuration
-import { API_CONFIG } from "./apiConfig";
+import { API_CONFIG, getAdminKey } from "./apiConfig";
 
 // API Configuration
 const BASE_URL = API_CONFIG.BASE_URL;
@@ -49,6 +49,12 @@ async function apiFetch(url, options = {}, retryCount = 0) {
     "ngrok-skip-browser-warning": "true",
     ...options.headers,
   };
+
+  // Add admin API key if present (required for PATCH status endpoints)
+  const adminKey = getAdminKey();
+  if (adminKey) {
+    headers["X-API-Key"] = adminKey;
+  }
 
   // Add authentication if token exists
   if (authToken) {
@@ -309,19 +315,23 @@ export async function fetchReportById(id) {
 
 /**
  * Fetch reports by status
- * @param {string} status - Status to filter by (e.g. "Pending", "Cleaned")
+ * Backend route is GET /reports/by-status/{status} with lowercase
+ * statuses ("pending" | "cleaned"). Case-insensitive on the server.
+ * @param {string} status - Status to filter by ("pending" | "cleaned")
  * @returns {Promise<Array>} Normalized array of reports
  */
 export async function fetchReportsByStatus(status) {
   if (!status) return fetchAllReports();
 
   try {
-    // The backend endpoint takes the status directly in the path
-    const result = await apiFetch(`${BASE_URL}/detections/by-status/${status}`, {
+    const normalized = String(status).toLowerCase().trim();
+    const result = await apiFetch(`${BASE_URL}/reports/by-status/${normalized}`, {
       method: "GET",
     });
 
-    return normalizeReports(result.data || []);
+    // Backend returns { status_filter, count, reports: [...] }
+    const list = Array.isArray(result.data) ? result.data : result.data?.reports || [];
+    return normalizeReports(list);
   } catch (error) {
     console.error(`Failed to fetch reports with status ${status}:`, error);
     throw new Error(`Failed to fetch reports: ${error.message}`);
@@ -444,6 +454,24 @@ export async function updateReportStatus(id, status) {
     console.error(`Failed to update report status ${id}:`, error);
     throw new Error(`Failed to update report status: ${error.message}`);
   }
+}
+
+/**
+ * Fetch analytics aggregates computed by the backend.
+ * @returns {Promise<{total:number, per_day:object, per_class:object, per_status:object}>}
+ */
+export async function fetchStatsSummary() {
+  const result = await apiFetch(`${BASE_URL}/reports/stats/summary`, { method: "GET" });
+  return result.data;
+}
+
+/**
+ * Fetch hotspot ranking (top grid cells by report count).
+ * @returns {Promise<{hotspots:Array}>}
+ */
+export async function fetchHotspots() {
+  const result = await apiFetch(`${BASE_URL}/reports/stats/hotspots`, { method: "GET" });
+  return result.data;
 }
 
 /**

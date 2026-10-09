@@ -34,9 +34,8 @@ export default function Reports() {
       if (currentFilter === "all") {
         data = await fetchAllReports();
       } else {
-        // Capitalize for API: "pending" -> "Pending" — preserved
-        const statusParam = currentFilter.charAt(0).toUpperCase() + currentFilter.slice(1);
-        data = await fetchReportsByStatus(statusParam);
+        // Backend expects lowercase "pending" | "cleaned" (case-insensitive).
+        data = await fetchReportsByStatus(currentFilter.toLowerCase());
       }
 
       setReports(data || []);

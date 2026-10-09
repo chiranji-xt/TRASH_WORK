@@ -1,12 +1,38 @@
 import { useState } from "react";
+import { API_CONFIG } from "../api/apiConfig";
 
 export default function Login({ onLogin }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (email.trim() && password.trim()) onLogin();
+    setError("");
+    const key = apiKey.trim();
+    if (!key) {
+      setError("Enter the admin API key (ADMIN_API_KEY from the backend .env).");
+      return;
+    }
+    setChecking(true);
+    try {
+      // Confirm the backend is reachable, then store the key. It is sent as
+      // the X-API-Key header and is required for status updates.
+      const res = await fetch(`${API_CONFIG.BASE_URL}/health`, {
+        headers: { "ngrok-skip-browser-warning": "true" },
+      });
+      if (!res.ok) throw new Error(`Backend unreachable (${res.status})`);
+      try {
+        localStorage.setItem("admin_api_key", key);
+      } catch {
+        /* storage unavailable */
+      }
+      onLogin();
+    } catch (err) {
+      setError(err.message || "Login failed");
+    } finally {
+      setChecking(false);
+    }
   };
 
   return (
@@ -49,19 +75,14 @@ export default function Login({ onLogin }) {
 
           <form onSubmit={handleSubmit} className="mt-7 space-y-4">
             <div>
-              <label htmlFor="login-email" className="mb-1.5 block text-[13px] font-bold text-ink">Work email</label>
-              <input id="login-email" type="email" required value={email} className="inv-input px-3.5 py-2.5" placeholder="you@municipality.gov" onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+              <label htmlFor="login-key" className="mb-1.5 block text-[13px] font-bold text-ink">Admin API key</label>
+              <input id="login-key" type="password" required value={apiKey} className="inv-input px-3.5 py-2.5" placeholder="ADMIN_API_KEY from backend .env" onChange={(e) => setApiKey(e.target.value)} autoComplete="off" />
             </div>
-            <div>
-              <div className="mb-1.5 flex items-baseline justify-between">
-                <label htmlFor="login-password" className="block text-[13px] font-bold text-ink">Password</label>
-              </div>
-              <input id="login-password" type="password" required value={password} className="inv-input px-3.5 py-2.5" placeholder="••••••••" onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-            </div>
-            <button type="submit" className="inv-btn-primary w-full !py-3">Sign in to console</button>
+            {error && <p className="text-[13px] font-semibold text-[#A03E2E]">{error}</p>}
+            <button type="submit" disabled={checking} className="inv-btn-primary w-full !py-3 disabled:opacity-50">{checking ? "Verifying…" : "Sign in to console"}</button>
           </form>
 
-          <p className="mt-6 border-t border-line pt-4 text-center text-[11px] leading-relaxed text-ink-mute">Demo build — any email / password combination will sign you in.</p>
+          <p className="mt-6 border-t border-line pt-4 text-center text-[11px] leading-relaxed text-ink-mute">Backend: {API_CONFIG.BASE_URL} (set VITE_API_URL to change it). The key is sent as the X-API-Key header.</p>
         </div>
       </div>
     </div>

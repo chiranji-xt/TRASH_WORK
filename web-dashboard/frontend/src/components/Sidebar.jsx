@@ -7,6 +7,7 @@ const MENU = [
   { to: "/reports", label: "Reports", icon: paths.box, match: (p) => p.startsWith("/reports") },
   { to: "/locations", label: "Zone map", icon: paths.pin, match: (p) => p.startsWith("/locations") },
   { to: "/heatmap", label: "Density", icon: paths.flame, match: (p) => p.startsWith("/heatmap") },
+  { to: "/analytics", label: "Analytics", icon: paths.chart, match: (p) => p.startsWith("/analytics") },
 ];
 
 const GENERAL = [

@@ -6,16 +6,18 @@ import DashboardHome from "./pages/DashboardHome.jsx";
 import HeatmapView from "./pages/HeatmapView.jsx";
 import LocationsMap from "./pages/LocationsMap.jsx";
 import Reports from "./pages/Reports.jsx";
+import Analytics from "./pages/Analytics.jsx";
 import Settings from "./pages/settings.jsx";
 
 import Sidebar from "./components/Sidebar.jsx";
 import Navbar from "./components/Navbar.jsx";
 import ToastNotification from "./components/ToastNotification.jsx";
 import NotificationPoller from "./components/NotificationPoller.jsx";
+import { getAdminKey } from "./api/apiConfig.js";
 
 export default function App() {
-  const [loggedIn, setLoggedIn] = useState(true);
-  // Set to true so you don't get blocked while testing UI
+  // Require login: a stored admin API key unlocks status updates.
+  const [loggedIn, setLoggedIn] = useState(() => Boolean(getAdminKey()));
   const [navOpen, setNavOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -48,6 +50,7 @@ export default function App() {
               <Route path="/heatmap" element={<HeatmapView />} />
               <Route path="/locations" element={<LocationsMap />} />
               <Route path="/reports" element={<Reports />} />
+              <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings" element={<Settings />} />
 
               {/* Redirect all unknown routes */}
