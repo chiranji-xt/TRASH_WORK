@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'report_store.dart';
 import 'report_details_page.dart';
 import 'all_reports_page.dart';
 import 'report_page.dart';
 
+/// Explore tab: OpenStreetMap (no API key needed) with report pins,
+/// category filter, tap-to-pin reporting, and live refresh.
+/// Replaces the old google_maps_flutter implementation which crashed
+/// without a Google Maps API key.
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
 
@@ -14,12 +19,14 @@ class MapPage extends StatefulWidget {
 }
 
 class _MapPageState extends State<MapPage> {
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
   Position? _currentPosition;
-  Set<Marker> _markers = {};
+  List<Marker> _markers = [];
   String _filterCategory = 'All';
   LatLng? _pinnedLocation;
   bool _pinningMode = false;
+
+  static const LatLng _defaultCenter = LatLng(20.5937, 78.9629); // India
 
   @override
   void initState() {
@@ -34,7 +41,7 @@ class _MapPageState extends State<MapPage> {
   @override
   void dispose() {
     reportStore.removeListener(_loadMarkers);
-    _mapController?.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -49,31 +56,52 @@ class _MapPageState extends State<MapPage> {
       }
       if (permission == LocationPermission.deniedForever) return;
 
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      Position position = await Geolocator.getCurrentPosition();
+      if (!mounted) return;
 
       setState(() {
         _currentPosition = position;
       });
 
       // Move camera to current location
-      if (_mapController != null && _currentPosition != null) {
-        _mapController!.animateCamera(
-          CameraUpdate.newLatLngZoom(
-            LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-            15.0,
-          ),
-        );
-      }
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        15.0,
+      );
+      _loadMarkers();
     } catch (e) {
       debugPrint('Error getting location: $e');
     }
   }
 
+  Color _pinColor(String category) {
+    switch (category.toLowerCase()) {
+      case 'plastic':
+      case 'plastic waste':
+        return Colors.blue;
+      case 'metal':
+      case 'metal waste':
+        return Colors.red;
+      case 'glass waste':
+        return Colors.teal;
+      case 'cardboard_paper':
+        return Colors.brown;
+      case 'styrofoam':
+        return Colors.grey;
+      case 'organic':
+        return Colors.green;
+      case 'hazardous':
+        return Colors.orange;
+      case 'e-waste':
+        return Colors.purple;
+      default:
+        return Colors.red;
+    }
+  }
+
   void _loadMarkers() {
     final items = reportStore.value;
-    final markers = <Marker>{};
+    final markers = <Marker>[];
 
     for (final item in items) {
       // Filter logic
@@ -82,62 +110,97 @@ class _MapPageState extends State<MapPage> {
       }
 
       if (item.latitude != null && item.longitude != null) {
-        final markerId = MarkerId(item.id);
         markers.add(
           Marker(
-            markerId: markerId,
-            position: LatLng(item.latitude!, item.longitude!),
-            infoWindow: InfoWindow(
-              title: item.title,
-              snippet: '${item.category} • Severity: ${item.severity}',
-            ),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ReportDetailsPage(item: item),
+            point: LatLng(item.latitude!, item.longitude!),
+            width: 40,
+            height: 40,
+            child: GestureDetector(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ReportDetailsPage(item: item),
+                  ),
+                );
+              },
+              child: Tooltip(
+                message: '${item.title}\n${item.category} • Severity: ${item.severity}',
+                child: Icon(
+                  Icons.location_on,
+                  color: _pinColor(item.category),
+                  size: 36,
                 ),
-              );
-            },
+              ),
+            ),
           ),
         );
       }
+    }
+
+    // Blue dot for the user's own location
+    if (_currentPosition != null) {
+      markers.add(
+        Marker(
+          point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          width: 24,
+          height: 24,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.blue,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: const [
+                BoxShadow(color: Colors.black26, blurRadius: 4),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     // Add pinned location marker if in pinning mode
     if (_pinnedLocation != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId('pinned_location'),
-          position: _pinnedLocation!,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: const InfoWindow(
-            title: 'Pinned Location',
-            snippet: 'Tap to report at this location',
-          ),
-          onTap: () {
-            // Navigate to report page with pre-filled location
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => const ReportPage(),
+          point: _pinnedLocation!,
+          width: 40,
+          height: 40,
+          child: GestureDetector(
+            onTap: () {
+              // Navigate to report page with pre-filled location
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ReportPage(),
+                ),
+              );
+            },
+            child: const Tooltip(
+              message: 'Pinned Location\nTap to report at this location',
+              child: Icon(
+                Icons.push_pin,
+                color: Colors.deepPurple,
+                size: 36,
               ),
-            );
-          },
+            ),
+          ),
         ),
       );
     }
 
-    setState(() {
-      _markers = markers;
-    });
+    if (mounted) {
+      setState(() {
+        _markers = markers;
+      });
+    }
   }
 
-  void _onMapTap(LatLng position) {
+  void _onMapTap(TapPosition _, LatLng position) {
     if (_pinningMode) {
       setState(() {
         _pinnedLocation = position;
       });
       _loadMarkers();
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Location pinned: ${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}'),
@@ -159,35 +222,28 @@ class _MapPageState extends State<MapPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return Scaffold(
       body: Stack(
         children: [
-          GoogleMap(
-            initialCameraPosition: CameraPosition(
-              target: _currentPosition != null
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _currentPosition != null
                   ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
-                  : const LatLng(20.5937, 78.9629), // Default to India
-              zoom: 12.0,
+                  : _defaultCenter,
+              initialZoom: 12.0,
+              onTap: _onMapTap,
             ),
-            onMapCreated: (controller) {
-              _mapController = controller;
-              if (_currentPosition != null) {
-                controller.animateCamera(
-                  CameraUpdate.newLatLngZoom(
-                    LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-                    15.0,
-                  ),
-                );
-              }
-            },
-            markers: _markers,
-            myLocationEnabled: true,
-            myLocationButtonEnabled: false,
-            mapType: MapType.normal,
-            onTap: _onMapTap,
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.cleancity.smart_garbage',
+              ),
+              MarkerLayer(markers: _markers),
+            ],
           ),
-          
+
           // Top Gradient Header
           Positioned(
             top: 0,
@@ -226,7 +282,7 @@ class _MapPageState extends State<MapPage> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: Colors.white.withValues(alpha: 0.2),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: DropdownButton<String>(
@@ -264,8 +320,8 @@ class _MapPageState extends State<MapPage> {
                           });
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text(_pinningMode 
-                                  ? 'Tap on map to pin a location' 
+                              content: Text(_pinningMode
+                                  ? 'Tap on map to pin a location'
                                   : 'Pinning mode disabled'),
                               duration: const Duration(seconds: 2),
                             ),
@@ -306,7 +362,8 @@ class _MapPageState extends State<MapPage> {
                   heroTag: 'zoom_in',
                   mini: true,
                   onPressed: () {
-                    _mapController?.animateCamera(CameraUpdate.zoomIn());
+                    final cam = _mapController.camera;
+                    _mapController.move(cam.center, cam.zoom + 1);
                   },
                   child: const Icon(Icons.add),
                 ),
@@ -315,7 +372,8 @@ class _MapPageState extends State<MapPage> {
                   heroTag: 'zoom_out',
                   mini: true,
                   onPressed: () {
-                    _mapController?.animateCamera(CameraUpdate.zoomOut());
+                    final cam = _mapController.camera;
+                    _mapController.move(cam.center, cam.zoom - 1);
                   },
                   child: const Icon(Icons.remove),
                 ),
@@ -325,11 +383,9 @@ class _MapPageState extends State<MapPage> {
                   mini: true,
                   onPressed: () {
                     if (_currentPosition != null) {
-                      _mapController?.animateCamera(
-                        CameraUpdate.newLatLngZoom(
-                          LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-                          15.0,
-                        ),
+                      _mapController.move(
+                        LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                        15.0,
                       );
                     } else {
                       _getCurrentLocation();
@@ -369,7 +425,7 @@ class _MapPageState extends State<MapPage> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                _pinningMode 
+                                _pinningMode
                                     ? 'Tap on map to pin location'
                                     : '${_markers.length} reports on map',
                                 style: theme.textTheme.bodyMedium?.copyWith(

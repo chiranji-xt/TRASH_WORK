@@ -3,7 +3,6 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-
 
 import Login from "./pages/Login.jsx";
 import DashboardHome from "./pages/DashboardHome.jsx";
-import HeatmapView from "./pages/HeatmapView.jsx";
 import LocationsMap from "./pages/LocationsMap.jsx";
 import Reports from "./pages/Reports.jsx";
 import Analytics from "./pages/Analytics.jsx";
@@ -47,7 +46,6 @@ export default function App() {
           <main className="pb-8">
             <Routes>
               <Route path="/" element={<DashboardHome />} />
-              <Route path="/heatmap" element={<HeatmapView />} />
               <Route path="/locations" element={<LocationsMap />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/analytics" element={<Analytics />} />

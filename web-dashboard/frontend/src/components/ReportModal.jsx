@@ -116,6 +116,28 @@ export default function ReportModal({ report, onClose, loading }) {
                     </p>
                   </dd>
                 </div>
+                {Array.isArray(report?.detections?.items) && report.detections.items.length > 0 && (
+                  <div className="rounded-lg border border-line px-3.5 py-3">
+                    <dt className="metalabel">All detections · {report.detections.count ?? report.detections.items.length}</dt>
+                    <dd className="mt-2 space-y-2">
+                      {report.detections.items.map((d, i) => {
+                        const pct = Math.round((Number(d.confidence) || 0) * 100);
+                        const label = d.class || d.class_ || d.label || "Unknown";
+                        return (
+                          <div key={i}>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-[13px] font-semibold text-ink">{label}</span>
+                              <span className="tnum font-mono text-[11px] text-ink-mute">{pct}%</span>
+                            </div>
+                            <div className="mt-1 h-1 overflow-hidden rounded-full bg-[#EDEAE0]">
+                              <div className="h-full rounded-full bg-forest" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </dd>
+                  </div>
+                )}
                 <Field label="Municipal zone" value={loc} />
                 <Field label="Reported (IST)" value={convertUTCtoIST(report.created_at || report.timestamp)} mono />
                 {(report.latitude ?? report.lat) != null && (

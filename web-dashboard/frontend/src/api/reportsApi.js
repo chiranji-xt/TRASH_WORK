@@ -440,11 +440,15 @@ export function getImageUrl(imagePath) {
  * Update report status
  * @param {number|string} id - Report ID
  * @param {string} status - New status
+ * @param {string} [reason] - Required by the backend when marking cleaned
  * @returns {Promise<Object>} Normalized report object
  */
-export async function updateReportStatus(id, status) {
+export async function updateReportStatus(id, status, reason) {
   try {
-    const url = `${BASE_URL}/reports/${id}/status?status=${encodeURIComponent(status)}`;
+    let url = `${BASE_URL}/reports/${id}/status?status=${encodeURIComponent(status)}`;
+    if (reason != null && String(reason).trim() !== "") {
+      url += `&reason=${encodeURIComponent(String(reason).trim())}`;
+    }
     const result = await apiFetch(url, {
       method: "PATCH",
     });
@@ -481,3 +485,92 @@ export async function fetchHotspots() {
 export function getBaseUrl() {
   return BASE_URL;
 }
+
+// ============================================================================
+// CASES (duplicate-report merging)
+// ============================================================================
+
+/**
+ * Fetch all cases (one row per real-world problem, with report_count).
+ * @param {Object} filters - {status, minReports, bbox:{minLat,minLon,maxLat,maxLon}}
+ * @returns {Promise<Array>} Empty array if the backend has no /cases route.
+ */
+export async function fetchCases(filters = {}) {
+  try {
+    const params = new URLSearchParams();
+    if (filters.status) params.set("status", filters.status);
+    if (filters.minReports) params.set("min_reports", String(filters.minReports));
+    if (filters.bbox) {
+      const { minLat, minLon, maxLat, maxLon } = filters.bbox;
+      params.set("min_lat", String(minLat));
+      params.set("min_lon", String(minLon));
+      params.set("max_lat", String(maxLat));
+      params.set("max_lon", String(maxLon));
+    }
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const result = await apiFetch(`${BASE_URL}/cases${qs}`, { method: "GET" });
+    return Array.isArray(result.data) ? result.data : [];
+  } catch (error) {
+    // Older/demo backends have no /cases route — fall back to plain reports.
+    console.warn("Cases unavailable, falling back to reports:", error.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch one case with member reports, photos and merge evidence.
+ */
+export async function fetchCaseById(id) {
+  if (!id) throw new Error("Case ID is required");
+  const result = await apiFetch(`${BASE_URL}/cases/${id}`, { method: "GET" });
+  return result.data;
+}
+
+/**
+ * Fetch the priority score breakdown for one case.
+ */
+export async function fetchCasePriority(id) {
+  if (!id) throw new Error("Case ID is required");
+  const result = await apiFetch(`${BASE_URL}/cases/${id}/priority`, { method: "GET" });
+  return result.data;
+}
+
+/**
+ * Fetch open cases ranked by priority score (server sorts).
+ */
+export async function fetchPriorityQueue(status = "open") {
+  const params = new URLSearchParams({ status, sort: "priority" });
+  const result = await apiFetch(`${BASE_URL}/cases?${params.toString()}`, { method: "GET" });
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+/**
+ * Fetch cleanup verifications (admin review queue). Filters: decision, caseId.
+ */
+export async function fetchVerifications(filters = {}) {
+  const params = new URLSearchParams();
+  if (filters.decision) params.set("decision", filters.decision);
+  if (filters.caseId != null) params.set("case_id", String(filters.caseId));
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const result = await apiFetch(`${BASE_URL}/verifications${qs}`, { method: "GET" });
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+/**
+ * Priority band for badge colours (mirrors backend thresholds).
+ */
+export function priorityBand(score) {
+  const s = Number(score);
+  if (Number.isNaN(s)) return "low";
+  if (s >= 75) return "critical";
+  if (s >= 50) return "high";
+  if (s >= 25) return "watch";
+  return "low";
+}
+
+export const PRIORITY_COLORS = {
+  critical: "#E66B59",
+  high: "#F2B84B",
+  watch: "#D9C53A",
+  low: "#9AA39B",
+};

@@ -169,13 +169,20 @@ def _save_annotated(image_path, detections):
         logger.warning("Could not read image for annotation: %s", image_path)
         return None
 
+    placed_labels = []  # (x, y, w, h) tag rects, to stagger overlapping tags
     for d in detections:
         x1, y1, x2, y2 = (int(c) for c in d["bbox"])
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 255), 2)
         label = f"{d['class']} {d['confidence']:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(img, (x1, y1 - th - 8), (x1 + tw + 4, y1), (0, 255, 255), -1)
-        cv2.putText(img, label, (x1 + 2, y1 - 5),
+        lx, ly = x1, y1 - th - 8
+        # Shift the tag down until it no longer covers a previous tag.
+        while any(lx < px + pw and lx + tw + 4 > px and ly < py + ph and ly + th + 8 > py
+                  for px, py, pw, ph in placed_labels):
+            ly += th + 10
+        placed_labels.append((lx, ly, tw + 4, th + 8))
+        cv2.rectangle(img, (lx, ly), (lx + tw + 4, ly + th + 8), (0, 255, 255), -1)
+        cv2.putText(img, label, (lx + 2, ly + th + 3),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
     cv2.imwrite(boxed_path, img)

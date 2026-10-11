@@ -1,4 +1,4 @@
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 // Correct working cluster library — preserved
@@ -8,14 +8,15 @@ import MarkerClusterGroup from "@changey/react-leaflet-markercluster";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 
-import { fetchAllReports, getImageUrl } from "../api/reportsApi";
+import { fetchAllReports, fetchCases, fetchCaseById } from "../api/reportsApi";
 import { useEffect, useState } from "react";
 import eventBus from "../data/eventBus";
 import { useRefresh } from "../context/RefreshContext.jsx";
-import { convertUTCtoIST, ageOf } from "../utils/timezone";
 import L from "leaflet";
 import { PageHeader, ErrorState, LoadingState, Card } from "../components/ui";
-import StatusBadge from "../components/StatusBadge";
+import ReportModal from "../components/ReportModal";
+import CasePanel from "../components/CasePanel";
+import HeatmapLayer from "../components/HeatmapLayer";
 
 // Pin colors per waste class — preserved behavior (violet replaces the
 // non-existent "purple" asset so E-Waste pins actually render).
@@ -36,7 +37,19 @@ function makeColoredIcon(color) {
   });
 }
 
-// --- SUB-COMPONENT FOR AUTO-FITTING BOUNDS — preserved ---
+// Helper: pin with a report_count badge for merged cases — preserved pin art.
+function makeCountIcon(color, count) {
+  return L.divIcon({
+    className: "case-pin",
+    html:
+      `<div style="position:relative;width:25px;height:41px;">` +
+      `<img src="https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png" style="width:25px;height:41px;display:block;" alt="" />` +
+      `<span style="position:absolute;top:-9px;right:-11px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:#12372A;color:#D6F453;font:700 11px/20px ui-monospace,monospace;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);">${count}</span></div>`,
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+  });
+}
 function MapBounds({ points }) {
   const map = useMap();
   useEffect(() => {
@@ -59,6 +72,13 @@ export default function LocationsMap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [stats, setStats] = useState({ total: 0, visible: 0, skipped: 0 });
+  const [view, setView] = useState("pins"); // "pins" | "heatmap"
+  const [casesById, setCasesById] = useState({});
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [caseLoading, setCaseLoading] = useState(false);
+  const [showCase, setShowCase] = useState(false);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [showReport, setShowReport] = useState(false);
   const refreshTick = useRefresh();
 
   const loadReports = async () => {
@@ -77,6 +97,16 @@ export default function LocationsMap() {
         .filter((r) => !isNaN(r.latitude) && !isNaN(r.longitude) && r.latitude !== 0 && r.longitude !== 0);
       setPoints(validReports);
       setStats({ total: rawCount, visible: validReports.length, skipped: rawCount - validReports.length });
+      // Cases for count badges + detail panel. fetchCases falls back to []
+      // on backends without the /cases route (e.g. the demo backend).
+      try {
+        const cases = await fetchCases();
+        const map = {};
+        for (const c of cases || []) map[c.id] = c;
+        setCasesById(map);
+      } catch {
+        setCasesById({});
+      }
     } catch (err) {
       console.error("LocationsMap: Failed to load reports:", err);
       setError("Failed to load reports. Please try again.");
@@ -98,10 +128,31 @@ export default function LocationsMap() {
     const k = Object.keys(classColors).find((key) => key.toLowerCase() === lower);
     return classColors[k] || "blue";
   };
-  const getLocationText = (p) => {
-    if (p.location_name && p.location_name !== "Unknown") return p.location_name;
-    if (p.locationName && p.locationName !== "Unknown") return p.locationName;
-    return `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`;
+  const caseCountOf = (p) => {
+    if (p.case_id == null) return 0;
+    const c = casesById[p.case_id];
+    return c ? Number(c.report_count || 0) : 0;
+  };
+
+  const openPoint = async (p) => {
+    // Reports grouped into a multi-report case open the case dossier
+    // (merged photos); lone reports open the standard report modal.
+    if (p.case_id != null && caseCountOf(p) > 1) {
+      setShowCase(true);
+      setCaseLoading(true);
+      setSelectedCase(null);
+      try {
+        setSelectedCase(await fetchCaseById(p.case_id));
+      } catch (err) {
+        console.error("Failed to load case:", err);
+        setSelectedCase(null);
+      } finally {
+        setCaseLoading(false);
+      }
+    } else {
+      setSelectedReport(p);
+      setShowReport(true);
+    }
   };
 
   if (loading && points.length === 0) return <LoadingState label="Loading waste reports…" />;
@@ -113,7 +164,29 @@ export default function LocationsMap() {
         eyebrow="Geographic intelligence"
         title="Zone map"
         description={`Showing ${stats.visible} of ${stats.total} reports${stats.skipped ? ` · ${stats.skipped} without coordinates hidden` : ""}.`}
-        actions={<span className="tnum rounded-lg border border-line bg-white px-2.5 py-1.5 font-mono text-xs font-bold text-ink-soft">{stats.visible}/{stats.total} plotted</span>}
+        actions={
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-line bg-white p-0.5" role="tablist" aria-label="Map view">
+              {[
+                ["pins", "Pins"],
+                ["heatmap", "Heatmap"],
+              ].map(([v, label]) => (
+                <button
+                  key={v}
+                  role="tab"
+                  aria-selected={view === v}
+                  onClick={() => setView(v)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-bold transition ${
+                    view === v ? "bg-forest-deep text-white" : "text-ink-soft hover:text-ink"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="tnum rounded-lg border border-line bg-white px-2.5 py-1.5 font-mono text-xs font-bold text-ink-soft">{stats.visible}/{stats.total} plotted</span>
+          </div>
+        }
       />
 
       {points.length === 0 && !loading && (
@@ -126,41 +199,38 @@ export default function LocationsMap() {
             <MapContainer center={[18.5204, 73.8567]} zoom={12} style={{ height: "100%", width: "100%" }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="© OpenStreetMap" />
               <MapBounds points={points} />
+              {view === "heatmap" ? (
+                <HeatmapLayer points={points} />
+              ) : (
               <MarkerClusterGroup chunkedLoading spiderfyOnMaxZoom removeOutsideVisibleBounds={false} maxClusterRadius={40}>
                 {points.map((p) => {
-                  const pending = String(p.status || "").toLowerCase() === "pending";
+                  const count = caseCountOf(p);
+                  const icon = count > 1 ? makeCountIcon(getColor(p), count) : makeColoredIcon(getColor(p));
                   return (
-                    <Marker key={p.id} position={[p.latitude, p.longitude]} icon={makeColoredIcon(getColor(p))}>
-                      <Popup minWidth={250}>
-                        <div className="p-1">
-                          {p.boxed_image_path || p.image_path ? (
-                            <div className="mb-2 h-32 w-full overflow-hidden rounded-md bg-[#F4F2E9]">
-                              <img src={getImageUrl(p.boxed_image_path || p.image_path)} alt="Detection preview" className="h-full w-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
-                            </div>
-                          ) : (
-                            <div className="mb-2 flex h-16 w-full items-center justify-center rounded-md border border-dashed border-line bg-[#FAF8F1] text-xs text-ink-mute">No photograph</div>
-                          )}
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="tnum font-display text-[16px] font-semibold text-ink">#{p.id}</span>
-                              <span className="rounded bg-[#EFF0EA] px-2 py-0.5 text-xs font-bold text-ink-soft">{getWasteClass(p)}</span>
-                            </div>
-                            <p className="text-[13px] text-ink-soft">{getLocationText(p)}</p>
-                            <p className="tnum font-mono text-[11px] text-ink-mute">
-                              {convertUTCtoIST(p.created_at || p.timestamp)}
-                              {pending && <span className="font-bold text-[#9A6700]"> · waiting {ageOf(p.created_at || p.timestamp)}</span>}
-                            </p>
-                            {p.status && <div className="pt-1"><StatusBadge status={p.status} size="sm" /></div>}
-                          </div>
-                        </div>
-                      </Popup>
-                    </Marker>
+                    <Marker
+                      key={p.case_id != null && count > 1 ? `case-${p.case_id}` : `report-${p.id}`}
+                      position={[p.latitude, p.longitude]}
+                      icon={icon}
+                      eventHandlers={{ click: () => openPoint(p) }}
+                    />
                   );
                 })}
               </MarkerClusterGroup>
+              )}
             </MapContainer>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-4 py-3">
+            {view === "heatmap" ? (
+              <>
+                {[["#E66B59", "Critical"], ["#F2B84B", "Elevated"], ["#D9C53A", "Watch"]].map(([c, t]) => (
+                  <span key={t} className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-soft">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: c }} /> {t}
+                  </span>
+                ))}
+                <span className="ml-auto text-xs text-ink-mute">Intensity blends report density with AI confidence</span>
+              </>
+            ) : (
+              <>
             {LEGEND.map(([c, label]) => (
               <span key={label} className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-soft">
                 <img src={`https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${c}.png`} alt="" className="h-4 w-auto" loading="lazy" onError={(e) => { e.target.style.display = "none"; }} />
@@ -168,6 +238,8 @@ export default function LocationsMap() {
               </span>
             ))}
             <span className="ml-auto text-xs text-ink-mute">Tap a cluster to spiderfy</span>
+              </>
+            )}
           </div>
         </Card>
 
@@ -195,6 +267,13 @@ export default function LocationsMap() {
           </div>
         </aside>
       </div>
+
+      {showCase && (
+        <CasePanel caseData={selectedCase} loading={caseLoading} onClose={() => setShowCase(false)} />
+      )}
+      {showReport && (
+        <ReportModal report={selectedReport} loading={false} onClose={() => setShowReport(false)} />
+      )}
     </div>
   );
 }

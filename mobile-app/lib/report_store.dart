@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'config.dart';
 
 /// Canonical statuses shared with the backend and dashboard: pending | cleaned.
@@ -30,6 +31,10 @@ class ReportItem {
 	final double? longitude;
 	final String status;
 	final DateTime createdAt;
+	// Cases feature: the merged case this report belongs to (null = lone report).
+	final int? caseId;
+	// Every detection the model returned (empty = none / unavailable).
+	final List<WasteDetection> detections;
 
 	ReportItem({
 		required this.id,
@@ -47,6 +52,8 @@ class ReportItem {
 		this.longitude,
 		this.status = kStatusPending,
 		DateTime? createdAt,
+		this.caseId,
+		this.detections = const [],
 	}) : createdAt = createdAt ?? DateTime.now();
 
 	ReportItem copyWith({
@@ -63,6 +70,8 @@ class ReportItem {
 		double? latitude,
 		double? longitude,
 		String? status,
+		int? caseId,
+		List<WasteDetection>? detections,
 	}) => ReportItem(
 		id: id,
 		title: title ?? this.title,
@@ -79,7 +88,29 @@ class ReportItem {
 		longitude: longitude ?? this.longitude,
 		status: status ?? this.status,
 		createdAt: createdAt,
+		caseId: caseId ?? this.caseId,
+		detections: detections ?? this.detections,
 	);
+
+  /// Single model detection: class label + confidence (bbox omitted on-device).
+  static List<WasteDetection> parseDetections(dynamic dets) {
+    final out = <WasteDetection>[];
+    if (dets is Map) {
+      final items = dets['items'];
+      if (items is List) {
+        for (final raw in items) {
+          if (raw is Map) {
+            final label = (raw['class'] ?? raw['class_'] ?? raw['label'])?.toString();
+            final conf = (raw['confidence'] as num?)?.toDouble();
+            if (label != null && label.isNotEmpty) {
+              out.add(WasteDetection(className: label, confidence: conf ?? 0.0));
+            }
+          }
+        }
+      }
+    }
+    return out;
+  }
 
   factory ReportItem.fromJson(Map<String, dynamic> json) {
     String resolveUrl(String? path) {
@@ -90,18 +121,27 @@ class ReportItem {
     final lat = json['latitude'] ?? json['lat'];
     final lon = json['longitude'] ?? json['lon'];
     final dets = json['detections'];
+    String? primaryClass;
+    num? detsSeverity;
+    if (dets is Map) {
+      final primary = dets['primary'];
+      if (primary is Map && primary['class'] != null) {
+        primaryClass = primary['class'].toString();
+      }
+      if (dets['severity'] is num) detsSeverity = dets['severity'] as num;
+    }
     return ReportItem(
       id: json['id']?.toString() ?? '',
       title: json['title']?.toString() ?? 'Report ${json['id']}',
       description: json['description']?.toString() ??
-          ((dets is Map ? dets['primary']?['class'] : null)?.toString() ??
+          primaryClass ??
               json['prediction']?.toString() ??
-              'Detected Waste'),
+              'Detected Waste',
       category: json['category']?.toString() ??
           json['prediction']?.toString() ??
           'Waste',
       severity: (json['severity'] as num?)?.toInt() ??
-          ((dets is Map ? dets['severity'] : null) as num?)?.toInt() ??
+          detsSeverity?.toInt() ??
           3,
       includeLocation: lat != null && lon != null,
       latitude: lat != null ? (lat as num).toDouble() : null,
@@ -114,8 +154,18 @@ class ReportItem {
       confidence: json['confidence'] != null ? (json['confidence'] as num).toDouble() : null,
       status: normalizeStatus(json['status']?.toString()),
       createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ?? DateTime.now(),
+      caseId: (json['case_id'] as num?)?.toInt(),
+      detections: ReportItem.parseDetections(dets),
     );
   }
+}
+
+/// One detection returned by the model: class label + confidence.
+class WasteDetection {
+  final String className;
+  final double confidence;
+
+  const WasteDetection({required this.className, required this.confidence});
 }
 
 /// Upload an image + metadata to POST /predict (shared with /upload-report).
@@ -128,8 +178,7 @@ Future<Map<String, dynamic>> uploadReport({
   int? severity,
   String? title,
   String? description,
-}) async {
-  final uri = Uri.parse('$baseUrl/predict');
+}) async {  final uri = Uri.parse('$baseUrl/predict');
   final req = http.MultipartRequest('POST', uri)
     ..fields['latitude'] = latitude.toString()
     ..fields['longitude'] = longitude.toString();
@@ -144,6 +193,59 @@ Future<Map<String, dynamic>> uploadReport({
   final body = await streamed.stream.bytesToString();
   if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
     throw HttpException('Upload failed (${streamed.statusCode}): $body');
+  }
+  return json.decode(body) as Map<String, dynamic>;
+}
+
+/// Crew API key storage (admin or cleaner key). Sent as X-API-Key on
+/// privileged calls. Cleaners can verify cleanups but cannot set status.
+Future<String?> getApiKey() async {
+  final prefs = await SharedPreferences.getInstance();
+  final key = prefs.getString('api_key');
+  return (key == null || key.isEmpty) ? null : key;
+}
+
+Future<void> setApiKey(String? key) async {
+  final prefs = await SharedPreferences.getInstance();
+  if (key == null || key.isEmpty) {
+    await prefs.remove('api_key');
+  } else {
+    await prefs.setString('api_key', key.trim());
+  }
+}
+
+Future<Map<String, String>> _authHeaders() async {
+  final key = await getApiKey();
+  final headers = {'ngrok-skip-browser-warning': 'true'};
+  if (key != null) headers['X-API-Key'] = key;
+  return headers;
+}
+
+/// Submit 1..3 after-photos proving a case is cleaned.
+/// Returns the raw verification response (decision, checks, annotated).
+Future<Map<String, dynamic>> submitVerification({
+  required int caseId,
+  required List<File> images,
+  required double latitude,
+  required double longitude,
+  DateTime? capturedAt,
+}) async {
+  final uri = Uri.parse('$baseUrl/cases/$caseId/verify-cleanup');
+  final req = http.MultipartRequest('POST', uri)
+    ..fields['latitude'] = latitude.toString()
+    ..fields['longitude'] = longitude.toString();
+  if (capturedAt != null) {
+    req.fields['captured_at'] = capturedAt.toIso8601String();
+  }
+  for (final image in images) {
+    req.files.add(await http.MultipartFile.fromPath('files', image.path));
+  }
+  req.headers.addAll(await _authHeaders());
+
+  final streamed = await req.send().timeout(const Duration(seconds: 120));
+  final body = await streamed.stream.bytesToString();
+  if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+    throw HttpException('Verification failed (${streamed.statusCode}): $body');
   }
   return json.decode(body) as Map<String, dynamic>;
 }

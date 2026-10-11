@@ -85,6 +85,8 @@ class _DetectionPreviewPageState extends State<DetectionPreviewPage> {
         latitude: lat,
         longitude: lon,
         status: kStatusPending,
+        caseId: (res['case_id'] as num?)?.toInt(),
+        detections: ReportItem.parseDetections(dets),
       ));
       if (dets == null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

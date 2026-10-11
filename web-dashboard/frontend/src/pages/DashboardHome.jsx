@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchAllReports, fetchReportById, getImageUrl } from "../api/reportsApi";
+import { fetchAllReports, fetchReportById, fetchPriorityQueue, fetchCaseById, priorityBand, PRIORITY_COLORS, getImageUrl } from "../api/reportsApi";
 import eventBus from "../data/eventBus";
 import { useRefresh } from "../context/RefreshContext.jsx";
 import { convertUTCtoIST, getISTDateKey, ageOf } from "../utils/timezone";
 import StatusBadge from "../components/StatusBadge";
 import ReportModal from "../components/ReportModal";
+import CasePanel from "../components/CasePanel";
 import { Card, CardHeader, AreaChart, EmptyState, ErrorState, LoadingState, PageHeader } from "../components/ui";
 import { Icon, paths, wasteMeta } from "../components/icons";
 
@@ -28,6 +29,10 @@ export default function DashboardHome() {
   const [selected, setSelected] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [queue, setQueue] = useState([]);
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [showCase, setShowCase] = useState(false);
+  const [caseLoading, setCaseLoading] = useState(false);
   const refreshTick = useRefresh();
 
   const loadReports = async () => {
@@ -43,9 +48,32 @@ export default function DashboardHome() {
     }
   };
 
+  const loadQueue = async () => {
+    // Priority queue degrades to [] where /cases is unavailable.
+    try {
+      setQueue((await fetchPriorityQueue("open")).slice(0, 5));
+    } catch {
+      setQueue([]);
+    }
+  };
+
+  const openCase = async (id) => {
+    setCaseLoading(true);
+    setShowCase(true);
+    setSelectedCase(null);
+    try {
+      setSelectedCase(await fetchCaseById(id));
+    } catch (err) {
+      console.error("Failed to load case:", err);
+    } finally {
+      setCaseLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadReports();
-    const unsubscribe = eventBus.subscribe("new-report", () => loadReports());
+    loadQueue();
+    const unsubscribe = eventBus.subscribe("new-report", () => { loadReports(); loadQueue(); });
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTick]);
@@ -216,11 +244,48 @@ export default function DashboardHome() {
                   ))}
                 </ol>
               )}
-              <Link to="/heatmap" className="mt-4 inline-flex items-center gap-1 text-[13px] font-bold text-civic-lime hover:underline">
-                Open density view <Icon d={paths.arrowUR} size={14} />
+              <Link to="/locations" className="mt-4 inline-flex items-center gap-1 text-[13px] font-bold text-civic-lime hover:underline">
+                Open zone map <Icon d={paths.arrowUR} size={14} />
               </Link>
             </div>
           </section>
+
+          {queue.length > 0 && (
+            <section className="rise-2 rounded-xl border border-line bg-white shadow-card">
+              <div className="px-5 pb-1 pt-4">
+                <p className="metalabel">Priority queue</p>
+                <h2 className="font-display mt-1 text-[19px] font-semibold tracking-tight text-ink">Clean next</h2>
+              </div>
+              <ol className="space-y-1 px-3 pb-4">
+                {queue.map((c, idx) => {
+                  const score = c.priority != null ? Number(c.priority.score) : null;
+                  const band = score != null ? priorityBand(score) : "low";
+                  return (
+                    <li key={c.id}>
+                      <button onClick={() => openCase(c.id)} className="inv-row flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left">
+                        <span className="tnum w-5 font-mono text-[11px] text-ink-mute">0{idx + 1}</span>
+                        <span
+                          className="tnum min-w-[44px] rounded-full px-2 py-0.5 text-center font-mono text-[11px] font-bold text-white"
+                          style={{ background: PRIORITY_COLORS[band] }}
+                          title={score != null ? `Priority ${score} (${band})` : "Unscored"}
+                        >
+                          {score != null ? score : "—"}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-semibold text-ink">
+                            Case #{c.id} · {c.report_count} report{c.report_count === 1 ? "" : "s"}
+                          </span>
+                          <span className="tnum block font-mono text-[11px] text-ink-mute">
+                            {c.latitude != null ? `${Number(c.latitude).toFixed(4)}, ${Number(c.longitude).toFixed(4)}` : "No location"}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          )}
 
           <Card className="rise-3">
             <CardHeader eyebrow="Composition" title="Waste mix" subtitle="Share of total volume" />
@@ -291,6 +356,7 @@ export default function DashboardHome() {
       </Card>
 
       {showModal && <ReportModal report={selected} loading={loadingDetail} onClose={() => setShowModal(false)} />}
+      {showCase && <CasePanel caseData={selectedCase} loading={caseLoading} onClose={() => setShowCase(false)} />}
     </div>
   );
 }

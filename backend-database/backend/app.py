@@ -8,7 +8,7 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -20,6 +20,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import config, crud, db, models
+from .cases import service as case_service
+from .priority import score as priority_score
+from .verification import checks as verify_checks
 from .ml import model as ml_model
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -27,6 +30,14 @@ logger = logging.getLogger(__name__)
 
 VALID_STATUSES = ("pending", "cleaned")
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+
+# Priority weights load once at startup: a broken config (weights not
+# summing to 1) raises ValueError here with a clear message instead of
+# silently skewing dispatch order.
+PRIORITY_CONFIG = priority_score.config_from_env()
+
+# Verification knobs load once at startup.
+VERIFY_CONFIG = verify_checks.config_from_env()
 
 app = FastAPI(title="Smart Garbage Detection API")
 
@@ -72,6 +83,11 @@ class UploadResponse(BaseModel):
     image_path: str
     boxed_image_path: Optional[str] = None
     detections: Optional[DetectionsSummary] = None
+    # Cases feature: which case the report landed in + how.
+    case_id: Optional[int] = None
+    match_outcome: Optional[str] = None
+    suggested_duplicate_of: Optional[int] = None
+    recurrence_of: Optional[int] = None
 
 
 class ReportOut(BaseModel):
@@ -85,6 +101,28 @@ class ReportOut(BaseModel):
     latitude: float
     longitude: float
     created_at: Optional[datetime] = None
+    case_id: Optional[int] = None
+
+
+class CaseOut(BaseModel):
+    id: int
+    status: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    report_count: int = 0
+    distinct_reporters: int = 0
+    first_reported_at: Optional[datetime] = None
+    last_reported_at: Optional[datetime] = None
+    recurrence_of: Optional[int] = None
+    suggested_duplicate_of: Optional[int] = None
+    score_version: Optional[str] = None
+    priority: Optional[dict] = None
+    closed_at: Optional[datetime] = None
+    closing_verification_id: Optional[int] = None
+
+
+class MergeBody(BaseModel):
+    report_id: int
 
 
 class StatusUpdateOut(BaseModel):
@@ -116,6 +154,22 @@ def require_admin(x_api_key: Optional[str] = Header(default=None, alias="X-API-K
     if x_api_key != config.ADMIN_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing admin API key")
     return True
+
+
+def require_cleaner(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    """Cleaner devices may submit cleanup verifications but may NOT set
+    report status directly (PATCH stays admin-only). The admin key is
+    accepted everywhere a cleaner key is."""
+    if config.ADMIN_API_KEY and x_api_key == config.ADMIN_API_KEY:
+        return "admin"
+    if x_api_key and x_api_key in (config.CLEANER_API_KEYS or []):
+        return f"cleaner:{x_api_key[:6]}"
+    if not config.ADMIN_API_KEY and not config.CLEANER_API_KEYS:
+        raise HTTPException(
+            status_code=503,
+            detail="No API keys configured. Set ADMIN_API_KEY / CLEANER_API_KEYS in .env.",
+        )
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # ---------- Helpers ----------
@@ -204,7 +258,64 @@ def _serialize_report(r) -> dict:
         "latitude": point.y,
         "longitude": point.x,
         "created_at": r.created_at,
+        "case_id": r.case_id,
     }
+
+
+def _serialize_case(c) -> dict:
+    lat, lon = None, None
+    try:
+        if c.centroid is not None:
+            pt = to_shape(c.centroid)
+            lat, lon = pt.y, pt.x
+    except Exception:
+        pass
+    return {
+        "id": c.id,
+        "status": c.status,
+        "latitude": lat,
+        "longitude": lon,
+        "report_count": c.report_count or 0,
+        "distinct_reporters": c.distinct_reporters or 0,
+        "first_reported_at": c.first_reported_at,
+        "last_reported_at": c.last_reported_at,
+        "recurrence_of": c.recurrence_of,
+        "suggested_duplicate_of": c.suggested_duplicate_of,
+        "score_version": c.score_version,
+        "closed_at": c.closed_at,
+        "closing_verification_id": c.closing_verification_id,
+    }
+
+
+def _serialize_verification(v) -> dict:
+    photos = v.photos if isinstance(v.photos, list) else []
+    return {
+        "id": v.id,
+        "case_id": v.case_id,
+        "cleaner_id": v.cleaner_id,
+        "attempt_no": v.attempt_no,
+        "photos": [f"/uploads/{p}" for p in photos],
+        "checks": v.checks,
+        "decision": v.decision,
+        "spot_checked": v.spot_checked,
+        "reviewed_by": v.reviewed_by,
+        "reviewed_at": v.reviewed_at,
+        "review_reason": v.review_reason,
+        "created_at": v.created_at,
+    }
+
+
+def _serialize_case_with_priority(c, db_session) -> dict:
+    """Case JSON plus a freshly computed priority (age at query time)."""
+    out = _serialize_case(c)
+    try:
+        out["priority"] = case_service.score_case_response(
+            db_session, c, PRIORITY_CONFIG)
+        out["score_version"] = out["priority"].get("version")
+    except Exception as e:
+        logger.warning("Priority scoring failed for case %s: %s", c.id, e)
+        out["priority"] = None
+    return out
 
 
 async def _process_upload(
@@ -314,6 +425,16 @@ async def _process_upload(
         logger.exception("Database error: %s", e)
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
+    # Cases feature: group with nearby reports of the same pile.
+    # Failure-safe by contract (service returns "skipped") plus a local
+    # guard, so matching can never break uploads.
+    case_outcome: dict = {"outcome": "skipped", "case_id": None}
+    try:
+        case_outcome = case_service.assign_report_to_case(
+            db_session, report, image_abs_path=file_path)
+    except Exception as e:
+        logger.warning("Case matching failed (non-fatal): %s", e)
+
     return {
         "success": True,
         "report_id": report.id,
@@ -328,6 +449,10 @@ async def _process_upload(
             if all_detections
             else None
         ),
+        "case_id": case_outcome.get("case_id"),
+        "match_outcome": case_outcome.get("outcome"),
+        "suggested_duplicate_of": case_outcome.get("suggested_duplicate_of"),
+        "recurrence_of": case_outcome.get("recurrence_of"),
     }
 
 
@@ -394,6 +519,120 @@ def read_reports_in_area(min_lon: float, min_lat: float, max_lon: float, max_lat
     return [_serialize_report(r) for r in reports]
 
 
+# ---------- Cases (duplicate-report merging) ----------
+@app.get("/cases", response_model=List[CaseOut])
+def list_cases(status: Optional[str] = None, min_reports: int = 0,
+               min_lon: Optional[float] = None, min_lat: Optional[float] = None,
+               max_lon: Optional[float] = None, max_lat: Optional[float] = None,
+               sort: Optional[str] = None,
+               db_session: Session = Depends(get_db)):
+    """One row per real-world problem, with report_count for map badges.
+
+    sort=priority ranks open cases by the transparent priority score
+    (computed fresh, since days_open changes without new reports).
+    """
+    q = db_session.query(models.Case)
+    if status:
+        normalized = status.lower().strip()
+        if normalized not in ("open", "cleaned", "reopened"):
+            raise HTTPException(status_code=400, detail="Invalid status filter")
+        q = q.filter(models.Case.status == normalized)
+    if min_reports > 0:
+        q = q.filter(models.Case.report_count >= min_reports)
+    if None not in (min_lon, min_lat, max_lon, max_lat):
+        box = func.ST_MakeEnvelope(min_lon, min_lat, max_lon, max_lat, 4326)
+        q = q.filter(models.Case.centroid.intersects(box))
+    rows = q.order_by(models.Case.last_reported_at.desc()).limit(500).all()
+    if (sort or "").lower() == "priority":
+        scored = [_serialize_case_with_priority(c, db_session) for c in rows]
+        scored.sort(key=lambda c: (c.get("priority") or {}).get("score", 0),
+                    reverse=True)
+        return scored
+    return [_serialize_case(c) for c in rows]
+
+
+@app.get("/cases/{case_id}")
+def read_case(case_id: int, db_session: Session = Depends(get_db)):
+    """Case detail: member reports, photos and merge evidence."""
+    case = db_session.query(models.Case).filter(models.Case.id == case_id).first()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    members = (db_session.query(models.GarbageReport)
+               .filter(models.GarbageReport.case_id == case_id)
+               .order_by(models.GarbageReport.created_at.desc()).all())
+    log = (db_session.query(models.CaseMergeLog)
+           .filter(models.CaseMergeLog.case_id == case_id)
+           .order_by(models.CaseMergeLog.created_at.desc()).limit(50).all())
+    return {
+        **_serialize_case(case),
+        "reports": [_serialize_report(r) for r in members],
+        "priority": case_service.score_case_response(
+            db_session, case, PRIORITY_CONFIG),
+        "merge_log": [
+            {"report_id": e.report_id, "decision": e.decision,
+             "score": e.score, "evidence": e.evidence,
+             "created_at": e.created_at} for e in log
+        ],
+    }
+
+
+@app.post("/cases/{case_id}/merge")
+def merge_into_case(case_id: int, body: MergeBody,
+                    db_session: Session = Depends(get_db),
+                    _admin: bool = Depends(require_admin)):
+    """Admin: force a report into a case. Logged as manual_merge."""
+    try:
+        case = case_service.manual_merge(db_session, case_id, body.report_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"success": True, "case_id": case.id,
+            "report_count": case.report_count}
+
+
+@app.post("/reports/{report_id}/split")
+def split_from_case(report_id: int, db_session: Session = Depends(get_db),
+                    _admin: bool = Depends(require_admin)):
+    """Admin: pull a report out of its case into a fresh single-report case."""
+    try:
+        case = case_service.split_report(db_session, report_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"success": True, "report_id": report_id,
+            "new_case_id": case.id}
+
+
+# ---------- Priority (transparent case ranking) ----------
+@app.get("/cases/{case_id}/priority")
+def case_priority(case_id: int, db_session: Session = Depends(get_db)):
+    """Full score breakdown for one case (computed fresh)."""
+    case = db_session.query(models.Case).filter(models.Case.id == case_id).first()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return {"case_id": case_id,
+            **case_service.score_case_response(db_session, case, PRIORITY_CONFIG)}
+
+
+@app.get("/priority/weights")
+def priority_weights(_admin: bool = Depends(require_admin)):
+    """Admin: read the current priority weights. Changes are config-only
+    (PRIORITY_W_* env vars); there is no runtime setter by design."""
+    return {"version": priority_score.SCORE_VERSION,
+            "weights": {
+                "items": PRIORITY_CONFIG.w_items,
+                "area": PRIORITY_CONFIG.w_area,
+                "class": PRIORITY_CONFIG.w_class,
+                "reporters": PRIORITY_CONFIG.w_reporters,
+                "age": PRIORITY_CONFIG.w_age,
+            },
+            "caps": {
+                "item_cap": PRIORITY_CONFIG.item_cap,
+                "reporter_cap": PRIORITY_CONFIG.reporter_cap,
+                "age_cap_days": PRIORITY_CONFIG.age_cap_days,
+                "extra_class_bonus": PRIORITY_CONFIG.extra_class_bonus,
+            },
+            "hazard_weights": PRIORITY_CONFIG.hazard_weights}
+
+
 @app.get("/reports/stats/summary")
 def reports_stats(db_session: Session = Depends(get_db)):
     """Aggregates powering the Analytics page: per-day counts, class split, status split."""
@@ -436,13 +675,25 @@ def reports_hotspots(db_session: Session = Depends(get_db)):
 
 @app.patch("/reports/{report_id}/status", response_model=StatusUpdateOut)
 def update_report_status(report_id: int, status: str,
+                         reason: Optional[str] = None,
                          db_session: Session = Depends(get_db),
                          _admin: bool = Depends(require_admin)):
-    """Update status. Requires X-API-Key admin header. Statuses: pending | cleaned."""
+    """Update status. Admin-only (cleaner keys are refused with 401):
+    cases must close through verification, not direct edits.
+
+    Setting status=cleaned requires a reason (?reason=...) which is written
+    to the audit log as an admin_override_cleaned entry.
+    """
     status = (status or "").lower().strip()
     if status not in VALID_STATUSES:
         raise HTTPException(
             status_code=400, detail=f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}"
+        )
+    if status == "cleaned" and not (reason or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="A reason is required to mark a report cleaned (?reason=...). "
+                   "Cases should close through POST /cases/{id}/verify-cleanup.",
         )
     report = crud.get_report(db_session, report_id)
     if report is None:
@@ -450,7 +701,19 @@ def update_report_status(report_id: int, status: str,
     report.status = status
     db_session.commit()
     db_session.refresh(report)
-    logger.info("Report #%s status -> %s", report_id, status)
+    logger.info("Report #%s status -> %s (reason: %s)", report_id, status, reason)
+    if status == "cleaned":
+        # Audit the override: direct status edits bypass verification.
+        db_session.add(models.CaseMergeLog(
+            report_id=report_id, case_id=report.case_id,
+            decision="admin_override_cleaned", score=None,
+            evidence={"reason": (reason or "").strip()}))
+        db_session.commit()
+    # Keep the parent case lifecycle in sync (all cleaned -> cleaned, etc.).
+    try:
+        case_service.sync_case_on_report_status(db_session, report)
+    except Exception as e:
+        logger.warning("Case status sync failed (non-fatal): %s", e)
     return {"success": True, "report_id": report_id, "status": status,
             "message": f"Report status updated to '{status}'"}
 
@@ -471,3 +734,244 @@ def get_reports_by_status(status: str, skip: int = 0, limit: int = 100,
     )
     results = [_serialize_report(r) for r in reports]
     return {"status_filter": normalized, "count": len(results), "reports": results}
+
+
+# ---------- Cleanup verification (cases close only through here) ----------
+def _verify_detect_fn(image_path: str):
+    """Production detector for verification: raw detections at the LOW
+    floor (so sub-bar weak hits stay visible as uncertainty) plus an
+    annotated image of the production-bar hits.
+
+    Returns (detections, boxed_image_url_or_None).
+    """
+    model = ml_model.load_model()
+    if model is None:
+        raise RuntimeError("Detection model is not available")
+    result = ml_model._run_model(image_path)
+    names = ml_model._current_class_names()
+    try:
+        h, w = result.orig_shape
+        img_area = float(h * w)
+    except Exception:
+        img_area = 0.0
+    raw = []
+    for box in result.boxes:
+        cid = int(box.cls[0])
+        conf = float(box.conf[0])
+        if conf < VERIFY_CONFIG.low_confidence:
+            continue
+        x1, y1, x2, y2 = (round(float(c), 2) for c in box.xyxy[0].tolist())
+        if img_area > 0:
+            area_frac = max(0.0, x2 - x1) * max(0.0, y2 - y1) / img_area
+            if area_frac < ml_model.MIN_BOX_AREA_FRAC:
+                continue
+        raw.append({"class": names.get(cid, f"Unknown-{cid}"),
+                    "class_id": cid, "confidence": round(conf, 4),
+                    "bbox": [x1, y1, x2, y2]})
+    raw.sort(key=lambda d: d["confidence"], reverse=True)
+    drawn = [d for d in raw
+             if d["confidence"] >= ml_model.PER_CLASS_CONF.get(
+                 d["class"], ml_model.CONFIDENCE_THRESHOLD)]
+    boxed_name = ml_model._save_annotated(image_path, drawn)
+    boxed_url = f"/annotated/{boxed_name}" if boxed_name else None
+    return raw, boxed_url
+
+
+def _close_case(db_session, case, verification_id: int, reviewer: Optional[str],
+                decision_label: str) -> None:
+    """Close a case + mark all member reports cleaned. One transaction."""
+    now = datetime.now()
+    case.status = "cleaned"
+    case.closed_at = now
+    case.closing_verification_id = verification_id
+    members = (db_session.query(models.GarbageReport)
+               .filter(models.GarbageReport.case_id == case.id).all())
+    for m in members:
+        m.status = "cleaned"
+    db_session.add(models.CaseMergeLog(
+        report_id=None, case_id=case.id, decision=decision_label, score=None,
+        evidence={"verification_id": verification_id,
+                  "reviewed_by": reviewer,
+                  "member_reports": [m.id for m in members]}))
+    db_session.commit()
+
+
+@app.post("/cases/{case_id}/verify-cleanup")
+async def verify_cleanup(
+    case_id: int,
+    files: List[UploadFile] = File(...),
+    latitude: float = Form(...),
+    longitude: float = Form(...),
+    captured_at: Optional[str] = Form(None),
+    gps_accuracy_m: Optional[float] = Form(None),
+    cleaner_id: Optional[str] = Form(None),
+    db_session: Session = Depends(get_db),
+    who: str = Depends(require_cleaner),
+):
+    """Cleaner flow: submit 1..N after-photos proving the pile is gone.
+
+    Returns the decision (passed / failed_still_litter / needs_review /
+    rejected_reuse) with per-check evidence and annotated images.
+    HONEST LIMIT: the detector cannot prove absence — a missed detection
+    can produce a false PASSED, which is why uncertain evidence routes to
+    human review and a fraction of passes are spot-checked.
+    """
+    case = db_session.query(models.Case).filter(models.Case.id == case_id).first()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if case.status == "cleaned":
+        raise HTTPException(status_code=400, detail="Case is already cleaned")
+    if not (VERIFY_CONFIG.min_photos <= len(files) <= VERIFY_CONFIG.max_photos):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Send between {VERIFY_CONFIG.min_photos} and "
+                   f"{VERIFY_CONFIG.max_photos} after-photos, got {len(files)}.")
+
+    # Rate limit: max attempts per case per hour.
+    window_start = datetime.now() - timedelta(hours=1)
+    recent = (db_session.query(models.CleanupVerification)
+              .filter(models.CleanupVerification.case_id == case_id,
+                      models.CleanupVerification.created_at >= window_start)
+              .count())
+    if not verify_checks.allowed_attempt(recent, VERIFY_CONFIG):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many verification attempts for case {case_id}; "
+                   f"try again later (max {VERIFY_CONFIG.max_attempts_per_hour}/hour).")
+
+    try:
+        centroid = to_shape(case.centroid)
+        centroid_lat, centroid_lon = centroid.y, centroid.x
+    except Exception:
+        raise HTTPException(status_code=400, detail="Case has no location yet")
+
+    now = datetime.now()
+    app_captured = None
+    if captured_at:
+        try:
+            app_captured = datetime.fromisoformat(captured_at)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="captured_at must be ISO-8601")
+    saved = []
+    after_photos = []
+    for f in files:
+        ext = _validate_image(f)
+        filename = f"verify_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex}{ext}"
+        file_path = os.path.join(config.UPLOAD_DIR, filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(f.file, buffer)
+        if os.path.getsize(file_path) / (1024 * 1024) > config.MAX_UPLOAD_MB:
+            os.remove(file_path)
+            raise HTTPException(status_code=413, detail="After-photo too large")
+        saved.append(filename)
+        after_photos.append(verify_checks.AfterPhoto(
+            path=file_path, latitude=latitude, longitude=longitude,
+            captured_at=app_captured))
+
+    # Context: member photos (before) + earlier after-photos (reuse check).
+    members = (db_session.query(models.GarbageReport)
+               .filter(models.GarbageReport.case_id == case_id).all())
+    before_paths = []
+    for m in members:
+        p = os.path.join(config.UPLOAD_DIR, os.path.basename(m.image_path or ""))
+        if os.path.exists(p):
+            before_paths.append(p)
+    prior_afters = []
+    for v in (db_session.query(models.CleanupVerification)
+              .filter(models.CleanupVerification.case_id == case_id).all()):
+        for p in (v.photos if isinstance(v.photos, list) else []):
+            full = os.path.join(config.UPLOAD_DIR, os.path.basename(p))
+            if os.path.exists(full):
+                prior_afters.append(full)
+    classes = sorted({m.prediction for m in members if m.prediction})
+    bars = dict(ml_model.PER_CLASS_CONF) if hasattr(ml_model, "PER_CLASS_CONF") else {}
+
+    req = verify_checks.VerifyRequest(
+        case_id=case_id, centroid_lat=centroid_lat, centroid_lon=centroid_lon,
+        case_classes=classes, case_first_reported_at=case.first_reported_at,
+        before_photo_paths=before_paths[:6],
+        prior_after_photo_paths=prior_afters[-6:],
+        photos=after_photos,
+        cleaner_id=cleaner_id or who,
+        now=now, case_class_bars=bars)
+    outcome = verify_checks.decide_verification(req, _verify_detect_fn, VERIFY_CONFIG)
+
+    attempt_no = (db_session.query(models.CleanupVerification)
+                  .filter(models.CleanupVerification.case_id == case_id).count()) + 1
+    row = models.CleanupVerification(
+        case_id=case_id, cleaner_id=cleaner_id or who, attempt_no=attempt_no,
+        photos=saved,
+        checks=[{**c} for c in outcome.checks],
+        decision=outcome.decision,
+        spot_checked="; ".join(outcome.needs_review_reasons) if outcome.spot_checked else None)
+    db_session.add(row)
+    db_session.commit()
+    db_session.refresh(row)
+
+    if outcome.decision == verify_checks.PASSED:
+        _close_case(db_session, case, row.id, None, "verification_passed")
+    case_status = db_session.query(models.Case).filter(
+        models.Case.id == case_id).first().status
+    return {
+        "success": True,
+        "verification_id": row.id,
+        "attempt_no": attempt_no,
+        "case_id": case_id,
+        "case_status": case_status,
+        "decision": outcome.decision,
+        "checks": outcome.checks,
+        "annotated_images": outcome.annotated_paths,
+        "needs_review_reasons": outcome.needs_review_reasons,
+        "spot_checked": outcome.spot_checked,
+        "limits": verify_checks.HONEST_LIMIT,
+    }
+
+
+@app.get("/verifications")
+def list_verifications(decision: Optional[str] = None,
+                       case_id: Optional[int] = None,
+                       db_session: Session = Depends(get_db),
+                       _admin: bool = Depends(require_admin)):
+    """Admin review queue (e.g. ?decision=needs_review)."""
+    q = db_session.query(models.CleanupVerification)
+    if decision:
+        q = q.filter(models.CleanupVerification.decision == decision.lower().strip())
+    if case_id is not None:
+        q = q.filter(models.CleanupVerification.case_id == case_id)
+    rows = q.order_by(models.CleanupVerification.created_at.desc()).limit(200).all()
+    return [_serialize_verification(v) for v in rows]
+
+
+@app.post("/verifications/{verification_id}/review")
+def review_verification(verification_id: int, approve: bool,
+                        reason: Optional[str] = None,
+                        db_session: Session = Depends(get_db),
+                        _admin: bool = Depends(require_admin)):
+    """Admin approves/rejects a NEEDS_REVIEW verification. Reason required."""
+    if not (reason or "").strip():
+        raise HTTPException(status_code=400, detail="A review reason is required.")
+    row = (db_session.query(models.CleanupVerification)
+           .filter(models.CleanupVerification.id == verification_id).first())
+    if row is None:
+        raise HTTPException(status_code=404, detail="Verification not found")
+    if row.decision not in (verify_checks.NEEDS_REVIEW,):
+        raise HTTPException(status_code=400,
+                            detail=f"Only needs_review verifications can be reviewed (is {row.decision})")
+    reviewer = "admin"
+    row.reviewed_by = reviewer
+    row.reviewed_at = datetime.now()
+    row.review_reason = reason.strip()
+    case = db_session.query(models.Case).filter(models.Case.id == row.case_id).first()
+    if approve and case is not None and case.status != "cleaned":
+        _close_case(db_session, case, row.id, reviewer, "verification_approved")
+        row.decision = verify_checks.PASSED
+    else:
+        db_session.add(models.CaseMergeLog(
+            report_id=None, case_id=row.case_id, decision="verification_rejected",
+            score=None, evidence={"verification_id": row.id,
+                                  "reviewed_by": reviewer,
+                                  "reason": reason.strip()}))
+        row.decision = verify_checks.FAILED_STILL_LITTER
+    db_session.commit()
+    db_session.refresh(row)
+    return {"success": True, "verification": _serialize_verification(row)}

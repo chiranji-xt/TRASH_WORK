@@ -6,5 +6,9 @@ uploads/
 *.pt
 *.onnx
 *.zip
+*.log
+*.bak
+dist/
+build/
 .DS_Store
 Thumbs.db

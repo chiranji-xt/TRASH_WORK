@@ -104,3 +104,10 @@ ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in _raw_origins.split(",") if o.s
 # If unset, admin endpoints return 503 with a clear message (fail closed is
 # handled in app.py via get_admin_key dependency).
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+
+# --- Cleaner auth ---
+# Comma-separated API keys for cleaner devices. Cleaners may submit
+# cleanup verifications but may NOT set report status directly
+# (PATCH /reports/{id}/status stays admin-only + requires a reason).
+# The admin key is also accepted everywhere a cleaner key is.
+CLEANER_API_KEYS = [k.strip() for k in os.getenv("CLEANER_API_KEYS", "").split(",") if k.strip()]
