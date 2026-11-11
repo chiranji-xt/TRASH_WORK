@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/readme-banner.svg" alt="TRASH_WORK" width="100%"/>
+</p>
+
 # Smart Garbage Detection & Community Mapping System
 
 AI-powered platform that detects garbage from citizen-submitted photos using YOLOv8,
